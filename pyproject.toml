@@ -1,0 +1,16 @@
+[project]
+name = "chintu-workspace"
+version = "0.1.0"
+description = "Local development workspace for the Chintu Android text-task gateway"
+requires-python = ">=3.12"
+dependencies = ["chintu-gateway", "chintu-adapters"]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "openapi-spec-validator>=0.7,<0.9"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+chintu-gateway = { path = "services/gateway", editable = true }
+chintu-adapters = { path = "packages/agent-adapters", editable = true }

@@ -1,0 +1,23 @@
+<resources>
+    <style name="Theme.Chintu" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#C7A9FF</item>
+        <item name="android:windowBackground">#060316</item>
+        <item name="android:colorBackground">#060316</item>
+        <item name="android:textColorPrimary">#F4F0FF</item>
+        <item name="android:textColorSecondary">#9691AE</item>
+        <item name="android:statusBarColor">#060316</item>
+        <item name="android:navigationBarColor">#060316</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:alertDialogTheme">@style/Theme.Chintu.Dialog</item>
+        <item name="android:dialogTheme">@style/Theme.Chintu.Dialog</item>
+    </style>
+    <style name="Theme.Chintu.Dialog" parent="android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:colorAccent">#C7A9FF</item>
+        <item name="android:colorBackground">#18112C</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:textColorPrimary">#F4F0FF</item>
+        <item name="android:textColorSecondary">#9691AE</item>
+    </style>
+</resources>

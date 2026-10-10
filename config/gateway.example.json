@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "database": "../var/chintu.sqlite3",
+  "queue_limit": 10,
+  "projects": [
+    {
+      "project_id": "first-workspace",
+      "display_name": "First reviewed workspace",
+      "path": "/absolute/path/to/first-workspace",
+      "execution_profiles": [
+        "inspect"
+      ]
+    }
+  ],
+  "runtimes": {
+    "claude": {
+      "enabled": false,
+      "executable": "claude",
+      "login_method": null,
+      "evidence": null
+    },
+    "codex": {
+      "enabled": false,
+      "executable": "codex",
+      "login_method": null,
+      "evidence": null
+    },
+    "claude-agent": {
+      "enabled": false,
+      "executable": "claude",
+      "model": "claude-opus-5-5",
+      "profiles": [
+        "inspect",
+        "develop"
+      ],
+      "load_user_settings": true,
+      "persona": null
+    }
+  },
+  "notes_dir": "~/Documents/Chintu Notes"
+}

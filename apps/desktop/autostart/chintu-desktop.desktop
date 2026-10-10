@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Chintu Desktop
+Comment=Phone presence and gateway supervisor for Chintu
+Exec=__REPO__/.venv/bin/chintu-desktop --repo __REPO__ run
+Path=__REPO__
+Icon=network-wireless
+Terminal=false
+Categories=Utility;
+OnlyShowIn=GNOME;Unity;XFCE;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

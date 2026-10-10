@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "idempotency_conflict",
+    "message": "This request ID was already used with different content.",
+    "retryable": false,
+    "details": {}
+  }
+}

@@ -1,0 +1,254 @@
+import asyncio
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from chintu_adapters import ClaudeAgentAdapter, TaskCommand
+from chintu_adapters.agent_sdk import DEFAULT_MODEL, PROFILE_POLICIES, describe_tool_use, speech_summary
+
+import fake_agent_sdk as fake
+
+SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+class ClaudeAgentAdapterTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "docs").mkdir()
+        self.executable = self.root / "claude"
+        self.executable.write_text("#!/bin/sh\nexit 0\n")
+        self.executable.chmod(0o700)
+        fake.clients.clear()
+
+    def adapter(self, **kwargs):
+        kwargs.setdefault("sdk", fake)
+        kwargs.setdefault("stop_seconds", 0.2)
+        return ClaudeAgentAdapter(str(self.executable), **kwargs)
+
+    def command(self, instruction="hello", **kwargs):
+        return TaskCommand("task", "attempt", str(self.root), instruction, **kwargs)
+
+    async def collect(self, adapter, command):
+        return [event async for event in adapter.run(command)]
+
+    def test_capabilities_available_with_sdk_and_executable(self):
+        caps = self.adapter().capabilities()
+        self.assertTrue(caps.available)
+        self.assertEqual(caps.provider, "claude-agent")
+        self.assertEqual(caps.execution_profiles, ("inspect", "develop"))
+        self.assertTrue(caps.continuation and caps.cancellation)
+        self.assertFalse(caps.approvals or caps.active_steering or caps.session_recovery)
+
+    def test_missing_sdk_reports_unavailable(self):
+        with patch.dict(sys.modules, {"claude_agent_sdk": None}):
+            caps = ClaudeAgentAdapter(str(self.executable)).capabilities()
+        self.assertFalse(caps.available)
+        self.assertEqual(caps.execution_profiles, ())
+        self.assertIn("claude-agent-sdk", caps.reason)
+
+    def test_missing_executable_reports_unavailable(self):
+        for executable in (str(self.root / "missing-claude"), "definitely-not-a-real-claude-binary"):
+            caps = ClaudeAgentAdapter(executable, sdk=fake).capabilities()
+            self.assertFalse(caps.available)
+            self.assertIn("not found", caps.reason)
+
+    def test_unknown_profile_configuration_is_unavailable(self):
+        caps = self.adapter(profiles=("inspect", "unrestricted")).capabilities()
+        self.assertFalse(caps.available)
+
+    def test_profile_permission_mapping(self):
+        adapter = self.adapter(profiles=("inspect", "develop", "desktop"))
+        expectations = {
+            "inspect": ("dontAsk", ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]),
+            "develop": ("acceptEdits", {"type": "preset", "preset": "claude_code"}),
+            "desktop": ("bypassPermissions", {"type": "preset", "preset": "claude_code"}),
+        }
+        for profile, (mode, tools) in expectations.items():
+            with self.subTest(profile=profile):
+                options = adapter.build_options(self.command(execution_profile=profile), self.root).kwargs
+                self.assertEqual(options["permission_mode"], mode)
+                self.assertEqual(options["tools"], tools)
+                self.assertEqual(options["allowed_tools"], list(PROFILE_POLICIES[profile].allowed_tools))
+                self.assertEqual(options["setting_sources"], ["user", "project"])
+                self.assertEqual(options["model"], DEFAULT_MODEL)
+                self.assertEqual(options["cli_path"], str(self.executable))
+                self.assertEqual(options["cwd"], str(self.root))
+                self.assertNotIn("resume", options)
+                self.assertNotIn("api_key", json.dumps(options, default=str).lower())
+        self.assertNotIn("Bash", adapter.build_options(self.command(), self.root).kwargs["allowed_tools"])
+        self.assertIn("Bash", adapter.build_options(self.command(execution_profile="develop"), self.root).kwargs["allowed_tools"])
+
+    def test_user_settings_and_limits_are_configurable(self):
+        adapter = self.adapter(load_user_settings=False, max_turns=7, model="claude-sonnet-5")
+        options = adapter.build_options(self.command(), self.root).kwargs
+        self.assertEqual(options["setting_sources"], [])
+        self.assertEqual(options["max_turns"], 7)
+        self.assertEqual(options["model"], "claude-sonnet-5")
+
+    async def test_started_output_succeeded_normalization(self):
+        events = await self.collect(self.adapter(), self.command("list the docs"))
+        kinds = [event.kind for event in events]
+        self.assertEqual(kinds[0], "started")
+        self.assertEqual(kinds[-1], "succeeded")
+        self.assertIn("progress", kinds)
+        self.assertIn("output", kinds)
+        self.assertEqual({event.provider_session_id for event in events}, {fake.SESSION})
+        progress = [event.payload["text"] for event in events if event.kind == "progress"]
+        self.assertIn("Reading: docs/01-requirements.md", progress)
+        self.assertIn("Running: ls -la --color", progress)
+        self.assertIn("Using: mcp__github__get_issue", progress)
+        outputs = [event.payload["text"] for event in events if event.kind == "output"]
+        self.assertEqual(outputs, ["Looking at the workspace first.", "Fake reply: list the docs"])
+        final = events[-1].payload
+        self.assertEqual(final["summary"], "Fake reply: list the docs")
+        self.assertEqual(final["speech_text"], "Fake reply: list the docs")
+        self.assertEqual(final["partial_effects"], [])
+        self.assertIsNone(final["error"])
+        serialized = json.dumps([event.payload for event in events])
+        self.assertNotIn("SECRET TOOL OUTPUT", serialized)
+        self.assertNotIn("Subagent text", serialized)
+        self.assertNotIn(str(self.root), serialized)
+        self.assertEqual(fake.clients[-1].prompt, "list the docs")
+        self.assertTrue(fake.clients[-1].disconnected)
+        self.assertEqual(self.adapter()._clients, {})
+
+    async def test_resume_passes_session_id(self):
+        adapter = self.adapter()
+        events = await self.collect(adapter, self.command("follow", provider_session_id=SESSION))
+        self.assertEqual(events[-1].kind, "succeeded")
+        self.assertEqual(fake.clients[-1].options.kwargs["resume"], SESSION)
+        self.assertEqual(events[0].provider_session_id, SESSION)
+
+    async def test_invalid_session_rejected_before_launch(self):
+        events = await self.collect(self.adapter(), self.command("x", provider_session_id="--continue"))
+        self.assertEqual([event.kind for event in events], ["failed"])
+        self.assertEqual(events[0].payload["error"]["code"], "invalid_request")
+        self.assertEqual(fake.clients, [])
+
+    async def test_cancel_interrupts_and_reports_cancelled(self):
+        adapter = self.adapter()
+        stream = adapter.run(self.command("[wait]", execution_profile="develop"))
+        self.assertEqual((await anext(stream)).kind, "started")
+        self.assertIn("attempt", adapter._clients)
+        await adapter.cancel("attempt")
+        self.assertTrue(fake.clients[-1].interrupted.is_set())
+        events = [event async for event in stream]
+        self.assertEqual(events[-1].kind, "cancelled")
+        self.assertTrue(events[-1].payload["partial_effects"])
+        self.assertTrue(fake.clients[-1].disconnected)
+        self.assertEqual(adapter._clients, {})
+        self.assertEqual(adapter._active, set())
+
+    async def test_cancel_before_launch_and_unknown_attempt(self):
+        adapter = self.adapter()
+        await adapter.cancel("missing")
+        adapter._active.add("attempt")
+        await adapter.cancel("attempt")
+        adapter._active.discard("attempt")
+        events = await self.collect(adapter, self.command("hello"))
+        self.assertEqual([event.kind for event in events], ["cancelled"])
+        self.assertEqual(fake.clients, [])
+
+    async def test_error_result_is_failed(self):
+        events = await self.collect(self.adapter(), self.command("[fail]"))
+        self.assertEqual(events[-1].kind, "failed")
+        self.assertEqual(events[-1].payload["error"]["code"], "provider_failure")
+        self.assertFalse(any(event.kind == "succeeded" for event in events))
+
+    async def test_stream_loss_and_sdk_exception_are_interrupted(self):
+        for text in ("[die]", "[raise]"):
+            with self.subTest(text=text):
+                adapter = self.adapter()
+                events = await self.collect(adapter, self.command(text))
+                self.assertEqual(events[0].kind, "started")
+                self.assertEqual(events[-1].kind, "interrupted")
+                self.assertNotIn("SENSITIVE DETAIL", json.dumps(events[-1].payload))
+                self.assertEqual(adapter._clients, {})
+
+    async def test_connect_failure_before_start_is_failed(self):
+        adapter = self.adapter()
+        self.executable.unlink()
+        adapter.resolved_executable = lambda: str(self.executable)
+        events = await self.collect(adapter, self.command("hello"))
+        self.assertEqual([event.kind for event in events], ["failed"])
+        self.assertEqual(events[0].payload["error"]["code"], "runtime_error")
+        self.assertIn("CLINotFoundError", events[0].payload["summary"])
+
+    async def test_result_without_init_still_starts(self):
+        events = await self.collect(self.adapter(), self.command("[no-init]"))
+        self.assertEqual([event.kind for event in events], ["started", "succeeded"])
+
+    async def test_desktop_profile_rejected_unless_enabled(self):
+        events = await self.collect(self.adapter(), self.command("hello", execution_profile="desktop"))
+        self.assertEqual([event.kind for event in events], ["failed"])
+        self.assertEqual(events[0].payload["error"]["code"], "unsupported_capability")
+        self.assertEqual(fake.clients, [])
+        enabled = self.adapter(profiles=("inspect", "develop", "desktop"))
+        events = await self.collect(enabled, self.command("hello", execution_profile="desktop"))
+        self.assertEqual(events[-1].kind, "succeeded")
+        self.assertEqual(fake.clients[-1].options.kwargs["permission_mode"], "bypassPermissions")
+
+    async def test_permission_prompts_are_denied_and_noted(self):
+        events = await self.collect(self.adapter(), self.command("[prompt]"))
+        self.assertEqual(events[-1].kind, "succeeded")
+        self.assertIn("Denied without approval: Edit", [e.payload["text"] for e in events if e.kind == "progress"])
+
+    async def test_duplicate_attempt_and_concurrent_attempts(self):
+        adapter = self.adapter()
+        first = adapter.run(self.command("[wait]"))
+        await anext(first)
+        rejected = await self.collect(adapter, self.command("again"))
+        self.assertEqual([event.kind for event in rejected], ["failed"])
+        other = adapter.run(TaskCommand("task2", "attempt2", str(self.root), "parallel"))
+        other_events = [event async for event in other]
+        self.assertEqual(other_events[-1].kind, "succeeded")
+        self.assertIn("attempt", adapter._clients)
+        await adapter.cancel("attempt")
+        self.assertEqual([event.kind async for event in first][-1], "cancelled")
+        self.assertEqual(adapter._clients, {})
+
+    async def test_timeout_interrupts_without_success(self):
+        adapter = self.adapter(timeout_seconds=0.3)
+        events = await self.collect(adapter, self.command("[wait]"))
+        self.assertEqual(events[0].kind, "started")
+        self.assertEqual(events[-1].kind, "interrupted")
+        self.assertTrue(fake.clients[-1].interrupted.is_set())
+
+    async def test_unicode_payload_byte_limit(self):
+        events = await self.collect(self.adapter(), self.command("😀" * 4000))
+        for event in events:
+            self.assertLessEqual(len(json.dumps(event.payload, ensure_ascii=False).encode()), 16384)
+
+    def test_helpers(self):
+        self.assertEqual(describe_tool_use("Bash", {"command": "echo  hi\n"}), "Running: echo hi")
+        self.assertEqual(describe_tool_use("Edit", {"file_path": "/w/a.py"}, Path("/w")), "Editing: a.py")
+        self.assertEqual(describe_tool_use("Read", {}), "Reading: Read")
+        self.assertLessEqual(len(describe_tool_use("Bash", {"command": "x" * 9000}).encode()), 400)
+        long = "First sentence here. " * 60
+        spoken = speech_summary(long)
+        self.assertLessEqual(len(spoken), 600)
+        self.assertTrue(spoken.endswith("."))
+        self.assertTrue(speech_summary("y" * 700).endswith("…"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class SpeakableTests(unittest.TestCase):
+    def test_markdown_and_urls_become_prose(self):
+        from chintu_adapters.agent_sdk import speakable, speech_summary
+        raw = "**The artifact** (https://claude.ai/artifact/abc) is an `HTML` page.\n- item one\n## Heading\n[docs](https://x.y) here"
+        spoken = speakable(raw)
+        self.assertNotIn("**", spoken)
+        self.assertNotIn("https://", spoken)
+        self.assertNotIn("`", spoken)
+        self.assertIn("The artifact (a link) is an HTML page.", spoken)
+        self.assertIn("docs here", spoken)
+        self.assertNotIn("##", spoken)
+        self.assertTrue(speech_summary(raw).startswith("The artifact (a link)"))

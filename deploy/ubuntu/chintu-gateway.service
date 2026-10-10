@@ -1,0 +1,21 @@
+# User unit: install to ~/.config/systemd/user/chintu-gateway.service
+# Runs as the owner so the Claude Code login under ~/.claude is used.
+[Unit]
+Description=Chintu private gateway (Claude Agent SDK provider)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/continuum/chintu
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/dev/continuum/chintu/.venv/bin/chintu-gateway --config var/gateway.local.json serve --provider claude-agent
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+StandardOutput=append:%h/dev/continuum/chintu/var/gateway.log
+StandardError=append:%h/dev/continuum/chintu/var/gateway.err.log
+
+[Install]
+WantedBy=default.target

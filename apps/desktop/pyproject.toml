@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chintu-desktop"
+version = "0.1.0"
+description = "Menu bar / top panel companion that watches and supervises the local Chintu gateway"
+requires-python = ">=3.12"
+# Deliberately light: the tray toolkit and the image library for the procedurally drawn icon.
+# segno renders the pairing QR in pure Python. HTTP uses the standard library; Tailscale is driven through its own CLI.
+dependencies = ["pystray>=0.19,<1", "pillow>=10,<13", "segno>=1.6,<2"]
+
+[project.scripts]
+chintu-desktop = "chintu_desktop.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,54 @@
+name: Verify prototype
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-and-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Python dependencies
+        run: |
+          python -m pip install uv==0.12.3
+          uv venv --python 3.12
+          uv pip sync --require-hashes requirements-dev.lock
+          uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway
+      - name: Contract, lifecycle, adapters, integration and Android core
+        run: make PYTHON=.venv/bin/python test demo
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile APK and run lint
+        run: |
+          python3 apps/android/tools/android.py fetch
+          python3 apps/android/tools/android.py build :app:assembleDebug :app:lintDebug :app:assembleDebugAndroidTest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: android-debug-and-lint
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/android/app/build/reports/lint-results-debug.*
+          if-no-files-found: warn

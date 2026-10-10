@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "event_id": 1,
+      "task_id": "33333333-3333-4333-8333-333333333333",
+      "attempt_id": null,
+      "kind": "task_accepted",
+      "timestamp": "2026-10-10T10:00:00Z",
+      "task_version": 1,
+      "payload": {
+        "state": "queued"
+      }
+    }
+  ],
+  "next_cursor": 1,
+  "has_more": false
+}
