@@ -47,7 +47,7 @@ The release keystore lives outside the repository at
 that file. Back the folder up: updates must be signed with the same key, and Android refuses an
 APK signed with a different one. GitHub Actions gets the same identity from four repository
 secrets, uploaded once with `scripts/package/set-signing-secrets.sh`:
-`CHINTU_KEYSTORE_B64`, `CHINTU_KEYSTORE_PASSWORD`, `CHINTU_KEY_ALIAS`, `CHINTU_KEY_PASSWORD`.
+`CHINTU_KEYSTORE_B64`, `CHINTU_KEYSTORE_PASSWORD` and `CHINTU_KEY_PASSWORD` (the alias is plain text in the workflow).
 
 ## Publishing a release
 

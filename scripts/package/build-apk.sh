@@ -43,8 +43,9 @@ if [ -z "${JAVA_HOME:-}" ] && [ -d /opt/homebrew/opt/openjdk@21/libexec/openjdk.
 fi
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$TOOLING/sdk}}
-if [ ! -x "$TOOLING/gradle-8.11.1/bin/gradle" ] && ! command -v gradle >/dev/null 2>&1; then
-  echo "==> Gradle missing; fetching pinned tool archives"
+# android.py only accepts its own pinned Gradle under .tooling, never one found on PATH (CI runners have one).
+if [ ! -x "$TOOLING/gradle-8.11.1/bin/gradle" ]; then
+  echo "==> Pinned Gradle missing; fetching pinned tool archives"
   $ANDROID_PY fetch
 elif [ ! -d "$SDK/build-tools/$BUILD_TOOLS_VERSION" ]; then
   echo "==> SDK build-tools missing under $SDK; fetching pinned tool archives"

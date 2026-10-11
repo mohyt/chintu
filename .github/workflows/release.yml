@@ -2,8 +2,9 @@ name: Release packages
 
 # Builds the three distributables and attaches them to the GitHub release for the tag.
 # Trigger: push a tag `vX.Y.Z` that matches the root VERSION file, or run manually.
-# Secrets for the signed APK (set with `gh secret set`): CHINTU_KEYSTORE_B64 (base64 of the
-# release keystore), CHINTU_KEYSTORE_PASSWORD, CHINTU_KEY_ALIAS, CHINTU_KEY_PASSWORD.
+# Secrets for the signed APK (set with scripts/package/set-signing-secrets.sh): CHINTU_KEYSTORE_B64
+# (base64 of the release keystore), CHINTU_KEYSTORE_PASSWORD, CHINTU_KEY_PASSWORD. The key alias is
+# not secret and is set below in plain text: as a secret, GitHub would mask every "chintu" in the logs.
 
 on:
   push:
@@ -34,7 +35,7 @@ jobs:
       - name: Build and verify the signed APK
         env:
           CHINTU_KEYSTORE_PASSWORD: ${{ secrets.CHINTU_KEYSTORE_PASSWORD }}
-          CHINTU_KEY_ALIAS: ${{ secrets.CHINTU_KEY_ALIAS }}
+          CHINTU_KEY_ALIAS: chintu
           CHINTU_KEY_PASSWORD: ${{ secrets.CHINTU_KEY_PASSWORD }}
         run: scripts/package/build-apk.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
