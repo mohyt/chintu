@@ -18,6 +18,10 @@ def _preview(text, limit=200):
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def _words(text):
+    return len(str(text or "").split())
+
+
 class Manager:
     """Single serialized worker with conservative real-runtime recovery quarantine."""
 
@@ -98,17 +102,21 @@ class Manager:
                 raise ValueError("Registered workspace changed after task acceptance")
             command = TaskCommand(task_id, attempt_id, workspace, instruction,
                                   snapshot["execution_profile"], snapshot["provider_session_id"])
-            log.info("task %s start provider=%s profile=%s project=%s resume=%s instruction=%r",
+            # INFO carries identifiers and sizes only; instruction/progress/output text is DEBUG.
+            log.info("task %s start provider=%s profile=%s project=%s resume=%s instruction_words=%d",
                      task_id[:8], snapshot["provider"], snapshot["execution_profile"], snapshot["project_id"],
-                     bool(snapshot["provider_session_id"]), _preview(instruction, 160))
+                     bool(snapshot["provider_session_id"]), _words(instruction))
+            log.debug("task %s instruction=%r", task_id[:8], _preview(instruction, 160))
             iterator = self.adapter.run(command)
             async for event in iterator:
                 if event.kind == "started":
                     log.info("task %s session %s", task_id[:8], (event.provider_session_id or "")[:36])
                 elif event.kind in {"progress", "output"}:
-                    log.info("task %s %s: %s", task_id[:8], event.kind, _preview(event.payload.get("text")))
+                    log.info("task %s %s words=%d", task_id[:8], event.kind, _words(event.payload.get("text")))
+                    log.debug("task %s %s: %s", task_id[:8], event.kind, _preview(event.payload.get("text")))
                 elif event.kind in TERMINAL:
-                    log.info("task %s %s: %s", task_id[:8], event.kind, _preview(event.payload.get("summary")))
+                    log.info("task %s %s words=%d", task_id[:8], event.kind, _words(event.payload.get("summary")))
+                    log.debug("task %s %s: %s", task_id[:8], event.kind, _preview(event.payload.get("summary")))
                 if event.kind == "started":
                     if not event.provider_session_id or len(event.provider_session_id) > 512:
                         raise ValueError("Missing or oversized provider session")

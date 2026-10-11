@@ -14,6 +14,8 @@ from .errors import ApiError
 
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
 ACTIVE = {"running", "waiting_for_input", "cancelling"}
+DEFAULT_TOKEN_TTL_DAYS = 30
+MAX_OPEN_ENROLLMENTS = 5
 
 
 def now():
@@ -42,12 +44,15 @@ def result(summary, code=None, *, partial_effects=False):
 class Store:
     """Short SQLite transactions keep snapshots, cursors, and operation keys atomic."""
 
-    def __init__(self, path, queue_limit=10, project_paths=None):
+    def __init__(self, path, queue_limit=10, project_paths=None, token_ttl_days=DEFAULT_TOKEN_TTL_DAYS):
         self.path = Path(path).resolve()
         self.project_paths = {key: str(Path(value).resolve()) for key, value in (project_paths or {}).items()}
         self.queue_limit = queue_limit
         if queue_limit < 1:
             raise ValueError("queue_limit must be positive")
+        if type(token_ttl_days) is not int or not 1 <= token_ttl_days <= 365:
+            raise ValueError("token_ttl_days must be an integer between 1 and 365")
+        self.token_ttl_seconds = token_ttl_days * 86400
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # umask must also protect WAL/SHM and worker-lock files at runtime.
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -89,6 +94,16 @@ class Store:
                 db.execute("ALTER TABLE clients ADD COLUMN paired_at REAL")
             if "last_seen" not in columns:
                 db.execute("ALTER TABLE clients ADD COLUMN last_seen REAL")
+            if "expires_at" not in columns:
+                # Credentials paired before expiry existed get the configured lifetime from now.
+                db.execute("ALTER TABLE clients ADD COLUMN expires_at REAL")
+                db.execute("UPDATE clients SET expires_at=? WHERE expires_at IS NULL",
+                           (time.time() + self.token_ttl_seconds,))
+            task_columns = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
+            if "client_id" not in task_columns:
+                # Tasks are private to the pairing client; rows from before this column have no owner
+                # and stay invisible to every phone (the worker and operator tools still see them).
+                db.execute("ALTER TABLE tasks ADD COLUMN client_id TEXT")
 
     @contextmanager
     def connection(self):
@@ -116,9 +131,19 @@ class Store:
             raise ValueError("Enrollment expiry must be between 1 and 900 seconds")
         secret = secrets.token_urlsafe(32)
         with self.transaction() as db:
+            db.execute("DELETE FROM enrollments WHERE consumed=1 OR expires<=?", (time.time(),))
+            # Bound the pool of live secrets: the newest MAX_OPEN_ENROLLMENTS survive, oldest go.
+            db.execute("DELETE FROM enrollments WHERE consumed=0 AND verifier NOT IN "
+                       "(SELECT verifier FROM enrollments WHERE consumed=0 ORDER BY expires DESC LIMIT ?)",
+                       (MAX_OPEN_ENROLLMENTS - 1,))
             db.execute("INSERT INTO enrollments(verifier, expires) VALUES (?, ?)",
                        (verifier(secret), time.time() + ttl_seconds))
         return secret
+
+    def open_enrollments(self):
+        with self.connection() as db:
+            return db.execute("SELECT COUNT(*) AS n FROM enrollments WHERE consumed=0 AND expires>?",
+                              (time.time(),)).fetchone()["n"]
 
     def pair(self, secret, name):
         token, client_id = secrets.token_urlsafe(48), str(uuid4())
@@ -128,14 +153,14 @@ class Store:
                 (verifier(secret), time.time())).rowcount
             if changed != 1:
                 raise ApiError(401, "unauthorized", "Enrollment secret is invalid or expired.")
-            db.execute("INSERT INTO clients(client_id,name,verifier,paired_at,last_seen) VALUES (?,?,?,?,?)",
-                       (client_id, name, verifier(token), time.time(), time.time()))
+            db.execute("INSERT INTO clients(client_id,name,verifier,paired_at,last_seen,expires_at) VALUES (?,?,?,?,?,?)",
+                       (client_id, name, verifier(token), time.time(), time.time(), time.time() + self.token_ttl_seconds))
         return {"client_id": client_id, "token": token, "token_type": "Bearer"}
 
     def authenticate(self, token):
         with self.connection() as db:
-            row = db.execute("SELECT client_id, last_seen FROM clients WHERE verifier=? AND revoked=0",
-                             (verifier(token),)).fetchone()
+            row = db.execute("SELECT client_id, last_seen FROM clients WHERE verifier=? AND revoked=0 AND expires_at>?",
+                             (verifier(token), time.time())).fetchone()
             if row and (row["last_seen"] is None or time.time() - row["last_seen"] > 5):
                 # Coarse presence stamp; throttled so polling doesn't turn every request into a write.
                 db.execute("UPDATE clients SET last_seen=? WHERE client_id=?", (time.time(), row["client_id"]))
@@ -191,32 +216,45 @@ class Store:
         return {"note_id": note_id, "file": file_name, "words": sum(len(c.split()) for c in chunks),
                 "finished_at": finished, "text": "\n\n".join(chunks)[:4000]}
 
-    def local_status(self, presence_seconds=120):
-        """Operator-facing summary for the desktop companion; no secrets, no task text."""
+    def clients(self, presence_seconds=120):
+        """Operator-facing client list; verifiers never leave the database."""
         current = time.time()
         with self.connection() as db:
-            clients = [{"client_id": row["client_id"], "name": row["name"],
-                        "paired_at": row["paired_at"], "last_seen": row["last_seen"],
-                        "connected": row["last_seen"] is not None and current - row["last_seen"] <= presence_seconds}
-                       for row in db.execute("SELECT client_id,name,paired_at,last_seen FROM clients WHERE revoked=0 ORDER BY paired_at")]
+            return [{"client_id": row["client_id"], "name": row["name"],
+                     "paired_at": row["paired_at"], "last_seen": row["last_seen"], "expires_at": row["expires_at"],
+                     "connected": row["last_seen"] is not None and current - row["last_seen"] <= presence_seconds
+                     and row["expires_at"] > current}
+                    for row in db.execute("SELECT client_id,name,paired_at,last_seen,expires_at FROM clients "
+                                          "WHERE revoked=0 AND expires_at>? ORDER BY paired_at", (current,))]
+
+    def local_status(self, presence_seconds=120):
+        """Operator-facing summary for the desktop companion; no secrets, no task text."""
+        clients = self.clients(presence_seconds)
+        with self.connection() as db:
             active = db.execute("SELECT COUNT(*) AS n FROM tasks WHERE state IN ('running','cancelling','waiting_for_input')").fetchone()["n"]
             total = db.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
         return {"clients": clients, "phone_connected": any(c["connected"] for c in clients),
                 "active_tasks": active, "total_tasks": total}
 
     def revoke(self, client_id):
+        """True when a live client was revoked; revoking again or an unknown ID is False."""
         with self.transaction() as db:
-            db.execute("UPDATE clients SET revoked=1 WHERE client_id=?", (client_id,))
+            return db.execute("UPDATE clients SET revoked=1 WHERE client_id=? AND revoked=0", (client_id,)).rowcount == 1
 
-    def _get(self, db, task_id):
-        row = db.execute("SELECT snapshot FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-        if row is None:
+    def revoke_all(self):
+        with self.transaction() as db:
+            return db.execute("UPDATE clients SET revoked=1 WHERE revoked=0").rowcount
+
+    def _get(self, db, task_id, client_id=None):
+        """Snapshot by ID; with ``client_id`` another client's task is indistinguishable from none."""
+        row = db.execute("SELECT snapshot, client_id FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if row is None or (client_id is not None and row["client_id"] != client_id):
             raise ApiError(404, "not_found", "Task not found.")
         return json.loads(row["snapshot"])
 
-    def get(self, task_id):
+    def get(self, task_id, client_id=None):
         with self.connection() as db:
-            return self._get(db, task_id)
+            return self._get(db, task_id, client_id)
 
     def workspace_for_task(self, task_id):
         with self.connection() as db:
@@ -286,8 +324,8 @@ class Store:
             snapshot.update(task_id=task_id, attempt_id=None, provider_session_id=None,
                             state="queued", task_version=0, created_at=stamp, updated_at=stamp,
                             result=None, pending_input=None)
-            db.execute("INSERT INTO tasks VALUES (?,?,?,?,?)",
-                       (task_id, encode(snapshot), "queued", body["project_id"], body["instruction"]))
+            db.execute("INSERT INTO tasks(task_id,snapshot,state,project_id,instruction,client_id) VALUES (?,?,?,?,?,?)",
+                       (task_id, encode(snapshot), "queued", body["project_id"], body["instruction"], client_id))
             db.execute("INSERT INTO task_workspaces VALUES (?,?)",
                        (task_id, self.project_paths.get(body["project_id"], "project:" + body["project_id"])))
             self._event(db, snapshot, "task_accepted", {"state": "queued"})
@@ -301,7 +339,7 @@ class Store:
             existing = self._replay(db, client_id, operation, body["message_id"], content)
             if existing is not None:
                 return existing, True, None
-            snapshot = self._get(db, task_id)
+            snapshot = self._get(db, task_id, client_id)
             if operation == "followup":
                 if body["expected_task_version"] != snapshot["task_version"]:
                     raise ApiError(409, "stale_task_version", "Task changed; refresh before sending new work.")
@@ -411,7 +449,8 @@ class Store:
                     partial_effects=snapshot["provider"] != "scripted"))
                 self._event(db, snapshot, "interrupted", snapshot["result"])
 
-    def tasks_page(self, limit, cursor=None):
+    def tasks_page(self, limit, cursor=None, client_id=None):
+        """Tasks visible to ``client_id``; ``None`` is the operator's unscoped view."""
         after = 0
         if cursor is not None:
             try:
@@ -420,12 +459,16 @@ class Store:
                     raise ValueError
             except ValueError:
                 raise ApiError(400, "invalid_cursor", "Invalid task cursor.") from None
+        query, args = "SELECT rowid,snapshot FROM tasks WHERE rowid>?", [after]
+        if client_id is not None:
+            query += " AND client_id=?"
+            args.append(client_id)
         with self.connection() as db:
-            rows = db.execute("SELECT rowid,snapshot FROM tasks WHERE rowid>? ORDER BY rowid LIMIT ?", (after, limit + 1)).fetchall()
+            rows = db.execute(query + " ORDER BY rowid LIMIT ?", (*args, limit + 1)).fetchall()
         return {"tasks": [json.loads(r["snapshot"]) for r in rows[:limit]],
                 "next_cursor": str(rows[limit - 1]["rowid"]) if len(rows) > limit else None}
 
-    def events_page(self, after, limit, task_id=None):
+    def events_page(self, after, limit, task_id=None, client_id=None):
         with self.connection() as db:
             maximum = db.execute("SELECT coalesce(max(event_id),0) FROM events").fetchone()[0]
             if after > maximum:
@@ -435,6 +478,9 @@ class Store:
             if task_id is not None:
                 query += " AND task_id=?"
                 args.append(task_id)
+            if client_id is not None:
+                query += " AND task_id IN (SELECT task_id FROM tasks WHERE client_id=?)"
+                args.append(client_id)
             rows = db.execute(query + " ORDER BY event_id LIMIT ?", (*args, limit + 1)).fetchall()
         events = [json.loads(row["envelope"]) for row in rows[:limit]]
         return {"events": events, "next_cursor": events[-1]["event_id"] if events else after,

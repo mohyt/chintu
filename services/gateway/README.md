@@ -27,12 +27,56 @@ In a separate local terminal, create an enrollment secret:
 .venv/bin/chintu-gateway --database var/chintu.sqlite3 enroll --ttl 300
 ```
 
-Enter that secret in the phone pairing screen, or open `http://127.0.0.1:8765/pair` in a browser on this machine: it shows a QR code carrying the gateway URL, machine name and a fresh one-time secret for the app to scan. The page, `GET /local/status` (presence summary for the desktop companion) and `POST /local/pairing-code` (fresh QR payload for the companion's own window) answer only direct loopback requests; through Tailscale Serve they return 403. It expires after five minutes and is
-consumed transactionally once. Keep it out of URLs and command history. Pairing returns
-an opaque bearer token; SQLite stores SHA-256 verifiers of randomly generated secrets
-and tokens. `DELETE /api/v1/clients/me` revokes the caller. API requests other than
-health/info require `X-Chintu-Protocol: 1`; authenticated routes also require the bearer
-credential. The database, its side files, and task text are private local state.
+Enter that secret in the phone pairing screen, or open the pairing page: it shows a QR
+code carrying the gateway URL, machine name and a fresh one-time secret for the app to
+scan. The page URL carries a per-start local proof, so print it rather than typing it:
+
+```sh
+.venv/bin/chintu-gateway --database var/chintu.sqlite3 pair-url
+```
+
+Each enrollment secret expires after its TTL (five minutes by default, ten from the page)
+and is consumed transactionally once; at most five unconsumed secrets exist at a time
+(creating another drops the oldest), and consumed or expired rows are purged on each
+creation. `POST /api/v1/pair` allows ten attempts per minute, then answers `429` with
+`Retry-After`. Keep secrets out of URLs and command history. Pairing returns an opaque
+bearer token; SQLite stores SHA-256 verifiers of randomly generated secrets and tokens.
+Each token expires `token_ttl_days` after pairing (top-level config key, default 30,
+range 1–365); an expired or revoked token gets `401` and the phone pairs again.
+`DELETE /api/v1/clients/me` revokes the caller. API requests other than health/info
+require `X-Chintu-Protocol: 1`; authenticated routes also require the bearer credential.
+Tasks, events and notes are private to the pairing client: another paired phone gets
+`404` for them. The database, its side files, and task text are private local state.
+
+### Local-only endpoints and the local proof
+
+On every start the gateway writes a random 32-byte secret to `local.secret` beside the
+database (mode 0600, `var/local.secret` under the daemon configuration). The owner-only
+endpoints require all of the following, and answer one generic `403` otherwise, without
+saying which check failed:
+
+- a loopback peer (`127.0.0.1` or `::1`) and none of the proxy headers Tailscale Serve
+  adds (`X-Forwarded-For`, `X-Forwarded-Host`, `Tailscale-User-Login`);
+- a `Host` header that is exactly `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`
+  for the bound port (a bare name only when the port is the scheme default), which
+  defeats DNS rebinding;
+- no `Origin` header and no `Sec-Fetch-Site: cross-site`, which refuses browser-initiated
+  cross-origin requests;
+- the proof: `X-Chintu-Local: <secret>`, compared in constant time. `GET /pair` is opened
+  by a browser that cannot set headers, so it takes the proof as `?key=<secret>` instead
+  (the printed `pair-url`); the page is static HTML and requests nothing else.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /pair?key=…` | QR pairing page (HTML) |
+| `GET /local/status` | presence summary for the desktop companion, including `clients[].expires_at` |
+| `POST /local/pairing-code` | fresh QR payload for the companion's own window |
+| `GET /local/clients` | `client_id`, `name`, `paired_at`, `last_seen`, `expires_at`, `connected` per live client |
+| `POST /local/clients/{client_id}/revoke` | revoke one phone immediately (`404` if unknown or already revoked) |
+
+These are not part of the phone contract and are excluded from the OpenAPI document.
+Offline, with the daemon stopped or running, `chintu-gateway --config … revoke --client-id <id>`
+or `revoke --all` revokes through the database and prints the count.
 
 ## Test without a phone
 
@@ -40,9 +84,10 @@ credential. The database, its side files, and task text are private local state.
 .venv/bin/python -m unittest discover -s services/gateway/tests -v
 ```
 
-Tests exercise authentication/revocation, concurrent submission retries, conflicts,
-commit rollback, queue limits, cursor replay, follow-up versions, cancellation races,
-worker exclusion, output limits, and restart interruption. They validate response and
+Tests exercise authentication/revocation/expiry, the local-proof checks, pairing throttle
+and enrollment caps, per-client task isolation, log hygiene, concurrent submission retries,
+conflicts, commit rollback, queue limits, cursor replay, follow-up versions, cancellation
+races, worker exclusion, output limits, and restart interruption. They validate response and
 error schemas against the shared contract, use temporary databases, and make no real
 inference requests. Test fixtures: normal text succeeds; `[wait]` waits for confirmed
 cancellation; `[fail]` fails; `[interrupt]` interrupts. Follow-up requires a succeeded
@@ -148,13 +193,17 @@ clarification resolution and artifacts remain `501`.
 
 ## Claude Agent SDK provider
 
-`--provider claude-agent` runs tasks through the Claude Agent SDK with Claude Code's full
-tool loop, the host's configured MCP servers, same-session follow-ups and interrupt-based
-cancellation. It needs the `claude-agent-sdk` package (`packages/agent-adapters[agent]`)
+`--provider claude-agent` runs tasks through the Claude Agent SDK with Claude Code's tool
+loop, same-session follow-ups and interrupt-based cancellation. It needs the
+`claude-agent-sdk` package (in `requirements-dev.lock`; also `packages/agent-adapters[agent]`)
 and a signed-in `claude` executable; it never receives an API key. The runtime block has
 `enabled`, `executable`, `model`, `profiles`, `load_user_settings` and optional
 `max_turns`/`timeout_seconds` instead of CLI protocol evidence. `desktop` must be listed
-explicitly in both the runtime and the project to exist.
+explicitly in both the runtime and the project to exist, and the adapter logs a one-line
+warning at start when it is. `inspect` and `develop` are confined to the registered
+workspace by a PreToolUse hook with no bare tool allows; `desktop` is unconfined
+(`bypassPermissions`). The exact guarantees and limits of each profile are in
+[deploy/README.md](../../deploy/README.md#execution-profiles).
 
 ```sh
 .venv/bin/chintu-gateway --config var/gateway.local.json serve --provider claude-agent
@@ -162,6 +211,14 @@ explicitly in both the runtime and the project to exist.
 
 Daemon installation (launchd/systemd), pairing, Tailscale Serve, enabling `desktop`, and
 which connectors are reachable are described in [deploy/README.md](../../deploy/README.md).
+
+## Logs
+
+`serve` logs to stdout at INFO: task IDs, provider, profile, project, event kinds and word
+counts, pairing and revocation events. Instruction, progress and output text is logged
+only at DEBUG (`CHINTU_LOG_LEVEL=DEBUG`). The process starts with `umask 077`; when
+`CHINTU_LOG_FILE` names a file the log goes there, and that file (or a regular file that
+stdout is redirected to) is set to mode 0600 at startup.
 
 ## Durable behavior and limits
 

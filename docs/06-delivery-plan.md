@@ -123,6 +123,11 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | Permission already granted for this task | Routine authorized steps proceed without repeated prompts | FR-10 |
 | Prompt contains shell metacharacters | Treated as instruction data, not launcher shell syntax | NFR-10 |
 | Project includes an out-of-scope symlink or hook | Runner policy enforced; no ungranted access/execution | NFR-10 |
+| `inspect`/`develop` task reads or edits outside the workspace (absolute path, `~`, `..`, symlink) | PreToolUse hook denies; task reports the refusal | NFR-10 |
+| Local process or rebinding page calls `/pair` or `/local/*` without the local secret | Generic 403; no enrollment secret minted | NFR-10 |
+| Second paired phone reads or cancels the first phone's task | 404; task unchanged | FR-04 |
+| Phone credential older than `token_ttl_days` | 401; pairing again restores access | FR-04 |
+| Eleven pairing attempts within a minute | 429 with `Retry-After`; secrets unaffected | NFR-10 |
 | Agent claims success but execution failed | UI and speech report recorded failure | FR-07, FR-12 |
 | Provider rate limit or expired login | Clear blocked/failure state and bounded recovery | FR-12 |
 | Disk full while submitting | No acknowledgment of an unrecorded task | NFR-03 |

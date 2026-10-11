@@ -7,7 +7,7 @@ SDK error mid-stream; ``[prompt]`` exercises the permission callback.
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from typing import Any
 
@@ -82,6 +82,13 @@ class PermissionResultDeny:
     message: str = ""
     behavior: str = "deny"
     interrupt: bool = False
+
+
+@dataclass
+class HookMatcher:
+    matcher: str | None = None
+    hooks: list = field(default_factory=list)
+    timeout: float | None = None
 
 
 class ClaudeSDKClient:

@@ -72,14 +72,20 @@ class SupervisorTests(unittest.TestCase):
         exe.chmod(0o755)
         return GatewaySupervisor(repo, 8765, None, listening=lambda port: listening)
 
-    def test_attaches_instead_of_starting_second_gateway(self):
+    def test_never_starts_second_process_on_a_busy_port(self):
         with tempfile.TemporaryDirectory() as root:
             supervisor = self._supervisor(root, listening=True)
             message = supervisor.start()
-            self.assertIn("already listening", message)
+            self.assertIn("already in use", message)
             self.assertFalse(supervisor.child_running())
-            self.assertIn("started elsewhere", supervisor.describe())
             self.assertIn("not started here", supervisor.stop())
+
+    def test_describe_never_calls_an_unverified_listener_the_gateway(self):
+        with tempfile.TemporaryDirectory() as root:
+            supervisor = self._supervisor(root, listening=True)
+            self.assertEqual(supervisor.describe(verified=True), "Gateway: listening on :8765 (started elsewhere)")
+            self.assertEqual(supervisor.describe(verified=False), "Port 8765 is in use by something that isn't Chintu")
+            self.assertEqual(supervisor.describe(), "Gateway: something listens on :8765 (not verified yet)")
 
     def test_missing_executable_is_reported(self):
         with tempfile.TemporaryDirectory() as root:

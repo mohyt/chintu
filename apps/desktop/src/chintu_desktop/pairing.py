@@ -6,7 +6,8 @@ with no UI. `show_window` is the tkinter window; it runs in its own process
 on GNOME) never competes with Tk for the main thread.
 
 Each request mints a fresh secret on the gateway, so the window only asks when it
-opens or when the user presses Refresh, never on a timer.
+opens or when the user presses Refresh, never on a timer. Like every `/local/*`
+call it carries the per-start proof from `var/local.secret` (see local.py).
 """
 
 import base64
@@ -14,11 +15,10 @@ import io
 import json
 import signal
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 
-from .status import DEFAULT_PORT, local_url
+from . import local
+from .status import DEFAULT_PORT
 
 BACKGROUND = "#060316"
 PANEL = "#18112C"
@@ -71,24 +71,24 @@ def _error_message(raw, fallback):
         return fallback
 
 
-def request_pairing_code(port=DEFAULT_PORT, timeout=5.0, opener=None):
-    """POST to the loopback-only endpoint; raises `PairingError` with a readable reason."""
-    request = urllib.request.Request(local_url(port, "/local/pairing-code"), method="POST",
-                                     headers={"Accept": "application/json"}, data=b"")
-    open_url = opener or urllib.request.urlopen
+def request_pairing_code(port=DEFAULT_PORT, repo=None, client=None):
+    """POST to the proven loopback endpoint; raises `PairingError` with a readable reason."""
+    client = client or local.LocalClient(repo, port, timeout=5.0)
     try:
-        with open_url(request, timeout=timeout) as response:
-            return parse_pairing_code(response.read())
-    except urllib.error.HTTPError as error:
-        raw = error.read() if hasattr(error, "read") else b""
+        _, body = client.request("POST", "/local/pairing-code")
+    except local.SecretMissing:
+        raise PairingError("The Chintu daemon is not running, or was not started from this repository "
+                           "(no var/local.secret).") from None
+    except local.Refused:
+        raise PairingError("Port %d refused the local proof: whatever listens there is not this repository's "
+                           "gateway." % port) from None
+    except local.HttpError as error:
         if error.code == 503:
-            raise PairingError(_error_message(raw, "Tailscale is not connected on this computer.")) from None
-        if error.code == 403:
-            raise PairingError("The gateway refused: pairing codes are only issued to this machine.") from None
-        raise PairingError(_error_message(raw, "gateway answered HTTP %d" % error.code)) from None
-    except (urllib.error.URLError, OSError, TimeoutError) as error:
-        reason = getattr(error, "reason", error)
-        raise PairingError("The gateway is not running on port %d (%s)." % (port, reason)) from None
+            raise PairingError(_error_message(error.body, "Tailscale is not connected on this computer.")) from None
+        raise PairingError(_error_message(error.body, "gateway answered HTTP %d" % error.code)) from None
+    except local.LocalError as error:
+        raise PairingError("The gateway is not running on port %d (%s)." % (port, error)) from None
+    return parse_pairing_code(body)
 
 
 def render_qr_png(payload, scale=8):
@@ -108,7 +108,7 @@ def countdown_text(seconds_left):
     return "Expires in %d:%02d" % (minutes, seconds)
 
 
-def show_window(port=DEFAULT_PORT, request=request_pairing_code, render=render_qr_png):
+def show_window(port=DEFAULT_PORT, repo=None, request=request_pairing_code, render=render_qr_png):
     """Open the pairing window and run its event loop until closed. Blocks."""
     import tkinter as tk
     from tkinter import font as tkfont
@@ -155,7 +155,7 @@ def show_window(port=DEFAULT_PORT, request=request_pairing_code, render=render_q
         status.configure(text="Requesting a fresh one-time code…")
         root.update_idletasks()
         try:
-            code = request(port)
+            code = request(port, repo)
             png = render(code.payload)
         except PairingError as error:
             state["deadline"] = None

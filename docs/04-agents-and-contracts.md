@@ -25,13 +25,13 @@ Do not extract login tokens from one application and inject them into another. D
 
 `packages/agent-adapters/src/chintu_adapters/agent_sdk.py` implements `claude-agent`. The gateway selects it with `serve --provider claude-agent` when `runtimes.claude-agent.enabled` is true; no CLI protocol evidence record is required because the SDK owns the transport. Each attempt opens one `ClaudeSDKClient` in the registered workspace, sends the instruction over the SDK stream (never argv), and normalizes `SystemMessage(init)` to `started`, assistant tool calls to bounded `progress`, assistant text to `output`, and the `ResultMessage` to `succeeded`/`failed`. A follow-up passes the stored session ID as `resume`. Cancellation calls `interrupt()` and reports `cancelled` only after the session ends; a stream that ends without a result is `interrupted`.
 
-| Profile | SDK permission mode | Built-in tools | Prompted actions |
-| --- | --- | --- | --- |
-| `inspect` | `dontAsk` | Read, Glob, Grep, WebSearch, WebFetch | Denied |
-| `develop` | `acceptEdits` | Claude Code preset; Edit, Write, Notebook, Bash pre-approved | Denied |
-| `desktop` | `bypassPermissions` | Claude Code preset plus loaded MCP servers | Denied (only `AskUserQuestion`, org-`ask` connectors, and critical-path removals still prompt) |
+| Profile | SDK permission mode | Built-in tools | Confinement | Prompted actions |
+| --- | --- | --- | --- | --- |
+| `inspect` | `dontAsk` | Read, Glob, Grep | PreToolUse hook: paths must resolve inside the workspace; no other tool; user settings only | Denied |
+| `develop` | `dontAsk` | Read, Glob, Grep, Edit, Write, MultiEdit, NotebookEdit, Bash | PreToolUse hook: file paths inside the workspace; Bash refused on outside absolute paths, `~`, `..`, `$HOME`, `sudo`, piped downloads, `cd` out | Denied |
+| `desktop` | `bypassPermissions` | Claude Code preset plus loaded MCP servers | None (owner opt-in, warning logged) | Denied (only `AskUserQuestion`, org-`ask` connectors, and critical-path removals still prompt) |
 
-`desktop` exists only when listed explicitly in both the runtime block and the project. `load_user_settings` loads the owner's user/project Claude Code settings so MCP servers configured on that host are available; claude.ai and Claude Desktop cloud connectors are not reachable from the SDK. See [deploy/README.md](../deploy/README.md) for daemon operation.
+`inspect` and `develop` pass no bare `allowed_tools`: the SDK auto-approves such entries before any callback, so the hook is the single authority for every call. The Bash filter is textual, not a sandbox; its exact guarantees and gaps are listed in [deploy/README.md](../deploy/README.md#execution-profiles). `desktop` exists only when listed explicitly in both the runtime block and the project. `load_user_settings` loads the owner's user Claude Code settings (and project settings for `develop`/`desktop`) so MCP servers configured on that host are available; claude.ai and Claude Desktop cloud connectors are not reachable from the SDK. See [deploy/README.md](../deploy/README.md) for daemon operation.
 
 Codex's public WebSocket app-server transport is currently documented as experimental. The proposed gateway uses a local integration, preferably stdio, and provides Chintu's own authenticated remote contract. Pin versions and verify actual capabilities during the spike. See S8.
 
@@ -101,8 +101,8 @@ Switching provider creates a new task. The user sees the summary and selected fi
 
 | Profile | Intended permission scope |
 | --- | --- |
-| Inspect | Read approved project content with tool and sandbox controls; no arbitrary executable project hooks assumed safe |
-| Develop | Edit within an agreed workspace and run explicitly permitted development operations |
+| Inspect | Read approved project content only: Read/Glob/Grep confined to the workspace by a tool hook; project settings and hooks never loaded |
+| Develop | Edit within the workspace (hook-confined file tools) and run shell commands that pass a textual outside-workspace filter |
 | Desktop | Trusted, prompt-free execution with all built-in tools and the host's configured MCP servers; opt-in per runtime and per project (`claude-agent` only) |
 | Extended tools | Additional browser, connector, or external actions only after their specific setup and grants |
 

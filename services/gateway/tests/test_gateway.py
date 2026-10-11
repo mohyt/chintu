@@ -1,5 +1,10 @@
+import contextlib
+import io
 import json
+import logging
+import os
 import sqlite3
+import stat
 import tempfile
 import time
 import unittest
@@ -11,7 +16,9 @@ from uuid import uuid4
 
 from chintu_adapters import AdapterEvent, ScriptedAdapter
 from chintu_gateway import Settings, Store, create_app
-from chintu_gateway.store import result
+from chintu_gateway.app import RateLimiter, local_secret_path
+from chintu_gateway.cli import _private_log_files, main
+from chintu_gateway.store import MAX_OPEN_ENROLLMENTS, result
 from starlette.testclient import TestClient
 
 
@@ -130,8 +137,144 @@ class GatewayTests(unittest.TestCase):
         response = self.client.post("/api/v1/tasks", headers=second_headers, json=value)
         self.assertEqual(response.status_code, 202)
         self.assertNotEqual(first["task_id"], response.json()["task"]["task_id"])
-        # Both clients belong to the configured owner.
-        self.assertEqual(self.client.get("/api/v1/tasks/" + first["task_id"], headers=second_headers).status_code, 200)
+        # Even the owner's other phone cannot see this phone's task.
+        self.assertEqual(self.client.get("/api/v1/tasks/" + first["task_id"], headers=second_headers).status_code, 404)
+
+    def test_tasks_are_private_to_the_pairing_client(self):
+        _, mine = self.submit("[wait]")
+        self.wait(mine["task_id"], "running")
+        other = self.pair(self.app.state.store.create_enrollment())
+        _, theirs = self.submit()
+        route = "/api/v1/tasks/" + mine["task_id"]
+        self.assertEqual(self.client.get(route, headers=other).status_code, 404)
+        listed = self.client.get("/api/v1/tasks", headers=other).json()["tasks"]
+        self.assertEqual(listed, [])
+        self.assertEqual(self.client.get("/api/v1/events?after=0", headers=other).json()["events"], [])
+        page = self.client.get(f"/api/v1/events?after=0&task_id={mine['task_id']}", headers=other).json()
+        self.assertEqual(page["events"], [])
+        for suffix, body in (("/cancel", {"message_id": uid()}),
+                             ("/messages", {"message_id": uid(), "expected_task_version": 1, "instruction": "x"}),
+                             (f"/inputs/{uid()}/answer", {"message_id": uid(), "expected_task_version": 1,
+                                                         "attempt_id": uid(), "answer": "yes"}),
+                             (f"/approvals/{uid()}/decision", {"message_id": uid(), "expected_task_version": 1,
+                                                              "attempt_id": uid(), "action_digest": "a" * 64,
+                                                              "decision": "allow"})):
+            with self.subTest(suffix=suffix):
+                response = self.client.post(route + suffix, headers=other, json=body)
+                self.assertEqual(response.status_code, 404, response.text)
+                self.schema(response, "Error")
+        self.assertEqual(self.get(mine["task_id"])["state"], "running")
+        self.assertEqual([t["task_id"] for t in self.client.get("/api/v1/tasks", headers=self.headers).json()["tasks"]],
+                         [mine["task_id"], theirs["task_id"]])
+        kinds = {e["task_id"] for e in self.client.get("/api/v1/events?after=0", headers=self.headers).json()["events"]}
+        self.assertEqual(kinds, {mine["task_id"], theirs["task_id"]})
+        self.post("/api/v1/tasks/" + mine["task_id"] + "/cancel", {"message_id": uid()})
+        self.wait(mine["task_id"], "cancelled")
+
+    def test_credentials_expire_and_can_be_revoked_locally(self):
+        store = self.app.state.store
+        with store.connection() as db:
+            row = db.execute("SELECT expires_at, paired_at FROM clients").fetchone()
+        self.assertAlmostEqual(row["expires_at"] - row["paired_at"], 30 * 86400, delta=5)
+        with self.assertRaises(ValueError):
+            Store(Path(self.temp.name) / "ttl.sqlite3", token_ttl_days=0)
+        with store.transaction() as db:
+            db.execute("UPDATE clients SET expires_at=?", (time.time() - 1,))
+        response = self.client.get("/api/v1/projects", headers=self.headers)
+        self.assertEqual(response.status_code, 401)
+        self.schema(response, "Error")
+        self.assertEqual(store.clients(), [])
+        headers = self.pair(store.create_enrollment())
+        client_id = store.clients()[0]["client_id"]
+        self.assertTrue(store.revoke(client_id))
+        self.assertFalse(store.revoke(client_id))
+        self.assertFalse(store.revoke(uid()))
+        self.assertEqual(self.client.get("/api/v1/projects", headers=headers).status_code, 401)
+        self.pair(store.create_enrollment())
+        self.pair(store.create_enrollment())
+        # Two live clients plus the expired, never-revoked one from setUp.
+        self.assertEqual(store.revoke_all(), 3)
+        self.assertEqual(store.clients(), [])
+
+    def test_revoke_cli_is_offline_and_reports_counts(self):
+        store = self.app.state.store
+        headers = self.pair(store.create_enrollment())
+        client_id = store.clients()[-1]["client_id"]
+        out = io.StringIO()
+        with patch("sys.argv", ["chintu-gateway", "--database", str(self.database), "revoke", "--client-id", client_id]):
+            with contextlib.redirect_stdout(out):
+                main()
+        self.assertEqual(json.loads(out.getvalue()), {"revoked": 1})
+        self.assertEqual(self.client.get("/api/v1/projects", headers=headers).status_code, 401)
+        out = io.StringIO()
+        with patch("sys.argv", ["chintu-gateway", "--database", str(self.database), "revoke", "--all"]):
+            with contextlib.redirect_stdout(out):
+                main()
+        self.assertEqual(json.loads(out.getvalue()), {"revoked": 1})
+        self.assertEqual(self.client.get("/api/v1/projects", headers=self.headers).status_code, 401)
+
+    def test_pair_url_cli_reads_the_local_secret(self):
+        path = local_secret_path(Settings(self.database))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(path.read_text(), self.app.state.local_secret)
+        out = io.StringIO()
+        with patch("sys.argv", ["chintu-gateway", "--database", str(self.database), "pair-url", "--port", "9999"]):
+            with contextlib.redirect_stdout(out):
+                main()
+        self.assertEqual(out.getvalue().strip(), "http://127.0.0.1:9999/pair?key=" + self.app.state.local_secret)
+        path.unlink()
+        with self.assertRaises(SystemExit):
+            with patch("sys.argv", ["chintu-gateway", "--database", str(self.database), "pair-url"]):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    main()
+
+    def test_pairing_is_throttled(self):
+        other = create_app(Settings(Path(self.temp.name) / "throttle.sqlite3"))
+        with TestClient(other) as client:
+            codes = []
+            for _ in range(11):
+                response = client.post("/api/v1/pair", headers={"X-Chintu-Protocol": "1"},
+                                       json={"enrollment_secret": "x" * 43, "client_name": "guess"})
+                codes.append(response.status_code)
+            self.assertEqual(codes, [401] * 10 + [429])
+            self.assertTrue(int(response.headers["Retry-After"]) >= 1)
+            self.schema(response, "Error")
+            self.assertEqual(response.json()["error"]["code"], "rate_limited")
+        limiter = RateLimiter(limit=2, window=60)
+        self.assertEqual([limiter.retry_after(0), limiter.retry_after(1), limiter.retry_after(2)], [0, 0, 59])
+        self.assertEqual(limiter.retry_after(61), 0)
+
+    def test_enrollments_are_purged_and_capped(self):
+        store = self.app.state.store
+        secrets_issued = [store.create_enrollment() for _ in range(MAX_OPEN_ENROLLMENTS + 2)]
+        self.assertEqual(store.open_enrollments(), MAX_OPEN_ENROLLMENTS)
+        stale = self.client.post("/api/v1/pair", headers={"X-Chintu-Protocol": "1"},
+                                 json={"enrollment_secret": secrets_issued[0], "client_name": "old"})
+        self.assertEqual(stale.status_code, 401)
+        self.pair(secrets_issued[-1])
+        with store.transaction() as db:
+            db.execute("UPDATE enrollments SET expires=0")
+        store.create_enrollment()
+        with store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM enrollments").fetchone()[0], 1)
+
+    def test_info_logs_carry_sizes_not_text(self):
+        with self.assertLogs("chintu.task", level="DEBUG") as captured:
+            _, task = self.submit("PRIVATE INSTRUCTION PHRASE")
+            self.wait(task["task_id"], "succeeded")
+        info = [r.getMessage() for r in captured.records if r.levelno >= logging.INFO]
+        debug = [r.getMessage() for r in captured.records if r.levelno == logging.DEBUG]
+        self.assertTrue(info and all("PRIVATE INSTRUCTION" not in line for line in info))
+        self.assertTrue(any("instruction_words=3" in line for line in info))
+        self.assertTrue(any("PRIVATE INSTRUCTION PHRASE" in line for line in debug))
+
+    def test_log_files_become_owner_only(self):
+        target = Path(self.temp.name) / "gateway.log"
+        target.write_text("")
+        target.chmod(0o644)
+        _private_log_files(str(target))
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        _private_log_files(str(target.parent / "missing.log"))
 
     def test_global_worker_serialization_and_cancel_before_start(self):
         _, running = self.submit("[wait]")
@@ -289,10 +432,13 @@ class GatewayTests(unittest.TestCase):
         response = self.client.get("/api/v1/artifacts/" + uid(), headers=self.headers)
         self.assertEqual(response.status_code, 501)
         self.schema(response, "Error")
-        self.post(f"/api/v1/tasks/{uid()}/inputs/{uid()}/answer", {"message_id": uid(),
+        _, task = self.submit()
+        self.post(f"/api/v1/tasks/{task['task_id']}/inputs/{uid()}/answer", {"message_id": uid(),
             "expected_task_version": 1, "attempt_id": uid(), "answer": "yes"}, 501)
-        self.post(f"/api/v1/tasks/{uid()}/approvals/{uid()}/decision", {"message_id": uid(),
+        self.post(f"/api/v1/tasks/{task['task_id']}/approvals/{uid()}/decision", {"message_id": uid(),
             "expected_task_version": 1, "attempt_id": uid(), "action_digest": "a" * 64, "decision": "allow"}, 501)
+        self.post(f"/api/v1/tasks/{uid()}/inputs/{uid()}/answer", {"message_id": uid(),
+            "expected_task_version": 1, "attempt_id": uid(), "answer": "yes"}, 404)
 
     def test_unsupported_provider_profile_and_path_never_launch(self):
         base = {"submission_key": uid(), "provider": "scripted", "project_id": "fixture",

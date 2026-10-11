@@ -94,7 +94,7 @@ class OperatorConfig:
             raise ValueError("Selected runtime is unavailable; reviewed auth/protocol/confinement/cancel checks are required")
         settings = Settings(database=self.settings.database, projects=self.settings.projects, notes_dir=self.settings.notes_dir,
             contract_path=self.settings.contract_path, queue_limit=self.settings.queue_limit,
-            runtime_evidence=evidence, login_method=runtime["login_method"])
+            runtime_evidence=evidence, login_method=runtime["login_method"], token_ttl_days=self.settings.token_ttl_days)
         return settings, adapter
 
     def _selected_agent(self, runtime):
@@ -120,7 +120,7 @@ def load_config(path, contract_path=DEFAULT_CONTRACT):
     if path.stat().st_size > 65536:
         raise ValueError("Operator config exceeds 64 KiB")
     value = json.loads(path.read_text())
-    object_fields(value, ("version", "database", "projects", "runtimes"), ("queue_limit", "notes_dir"))
+    object_fields(value, ("version", "database", "projects", "runtimes"), ("queue_limit", "notes_dir", "token_ttl_days"))
     if type(value["version"]) is not int or value["version"] != 1:
         raise ValueError("Operator config version must be 1")
     database = Path(text(value["database"])).expanduser()
@@ -135,6 +135,9 @@ def load_config(path, contract_path=DEFAULT_CONTRACT):
     queue_limit = value.get("queue_limit", 10)
     if type(queue_limit) is not int or not 1 <= queue_limit <= 100:
         raise ValueError("queue_limit must be an integer between 1 and 100")
+    token_ttl_days = value.get("token_ttl_days", 30)
+    if type(token_ttl_days) is not int or not 1 <= token_ttl_days <= 365:
+        raise ValueError("token_ttl_days must be an integer between 1 and 365")
     if not isinstance(value["projects"], list) or len(value["projects"]) > 100:
         raise ValueError("Operator config projects must be an array of at most 100 entries")
     registered = {}
@@ -175,4 +178,5 @@ def load_config(path, contract_path=DEFAULT_CONTRACT):
             for key in evidence_fields - {"version", "execution_profiles", "record"}:
                 if type(evidence[key]) is not bool:
                     raise ValueError("Evidence flags must be booleans")
-    return OperatorConfig(Settings(database.resolve(), registered, Path(contract_path), queue_limit, notes_dir=notes_dir), runtimes, path.parent)
+    return OperatorConfig(Settings(database.resolve(), registered, Path(contract_path), queue_limit, notes_dir=notes_dir,
+                                   token_ttl_days=token_ttl_days), runtimes, path.parent)

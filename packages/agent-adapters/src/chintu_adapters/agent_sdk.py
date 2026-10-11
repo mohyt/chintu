@@ -4,6 +4,11 @@ The SDK is imported lazily so the package works without it. No API key is ever
 passed; the SDK launches the owner's ``claude`` executable and uses its stored
 login. Profiles map to SDK permission modes and tool lists; there is no
 interactive approval path, so anything that would prompt is denied instead.
+
+``inspect`` and ``develop`` register no bare ``allowed_tools`` entries: the SDK
+auto-approves such entries before any callback, so confinement is enforced by the
+PreToolUse hook in :mod:`chintu_adapters.confinement`, which decides every call.
+``desktop`` is the owner's explicit opt-in to ``bypassPermissions``.
 """
 
 import re
@@ -11,35 +16,44 @@ import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 import importlib
+import logging
 from pathlib import Path
 import shutil
 from typing import AsyncIterator
 import uuid
-import warnings
 
+from .confinement import PROFILE_TOOLS, workspace_hook
 from .types import AdapterCapabilities, AdapterEvent, TaskCommand, bounded_text, result
 
 
 PROVIDER = "claude-agent"
 DEFAULT_MODEL = "claude-opus-5-5"
-READ_ONLY_TOOLS = ("Read", "Glob", "Grep", "WebSearch", "WebFetch")
-DEVELOP_TOOLS = READ_ONLY_TOOLS + ("Edit", "Write", "MultiEdit", "NotebookEdit", "Bash")
+READ_ONLY_TOOLS = PROFILE_TOOLS["inspect"]
+DEVELOP_TOOLS = PROFILE_TOOLS["develop"]
 CLAUDE_CODE_PRESET = {"type": "preset", "preset": "claude_code"}
+log = logging.getLogger("chintu.agent")
 
 
 @dataclass(frozen=True)
 class ProfilePolicy:
-    """SDK settings for one execution profile. ``tools=None`` keeps the full built-in set."""
+    """SDK settings for one execution profile. ``tools=None`` keeps the full built-in set.
+
+    ``confined`` profiles get the workspace PreToolUse hook and no bare allows;
+    ``project_settings`` controls whether a workspace's own ``.claude`` settings load.
+    """
 
     permission_mode: str
     tools: tuple[str, ...] | None
     allowed_tools: tuple[str, ...]
+    confined: bool
+    project_settings: bool
 
 
 PROFILE_POLICIES = {
-    "inspect": ProfilePolicy("dontAsk", READ_ONLY_TOOLS, READ_ONLY_TOOLS),
-    "develop": ProfilePolicy("acceptEdits", None, DEVELOP_TOOLS),
-    "desktop": ProfilePolicy("bypassPermissions", None, ()),
+    # A cloned repository's .claude/settings.json is untrusted input for read-only inspection.
+    "inspect": ProfilePolicy("dontAsk", READ_ONLY_TOOLS, (), confined=True, project_settings=False),
+    "develop": ProfilePolicy("dontAsk", DEVELOP_TOOLS, (), confined=True, project_settings=True),
+    "desktop": ProfilePolicy("bypassPermissions", None, (), confined=False, project_settings=True),
 }
 DEFAULT_PROFILES = ("inspect", "develop")
 
@@ -142,6 +156,8 @@ class ClaudeAgentAdapter:
         self._clients: dict[str, object] = {}
         self._active: set[str] = set()
         self._cancelled: set[str] = set()
+        if "desktop" in self.profiles:
+            log.warning("claude-agent desktop profile enabled: bypassPermissions, no workspace confinement")
 
     # -- availability -----------------------------------------------------
 
@@ -191,13 +207,19 @@ class ClaudeAgentAdapter:
             return sdk.PermissionResultDeny(
                 message=f"Chintu's {profile} profile does not authorize this action without an interactive approval.")
 
+        sources = ["user"] if self.load_user_settings else []
+        if policy.project_settings and self.load_user_settings:
+            sources.append("project")
         options = dict(
             cwd=str(project), model=self.model, permission_mode=policy.permission_mode,
             tools=list(policy.tools) if policy.tools is not None else dict(CLAUDE_CODE_PRESET),
             allowed_tools=list(policy.allowed_tools),
-            setting_sources=["user", "project"] if self.load_user_settings else [],
-            can_use_tool=deny,
+            setting_sources=sources,
         )
+        if policy.confined:
+            # The hook is the single authority for every tool call; the callback only backs it up.
+            options["hooks"] = {"PreToolUse": [sdk.HookMatcher(hooks=[workspace_hook(project, profile, notes)])]}
+            options["can_use_tool"] = deny
         if self.persona:
             # Keep Claude Code's own preset (tools, safety, CLAUDE.md loading) and append the voice-assistant persona.
             options["system_prompt"] = {"type": "preset", "preset": "claude_code", "append": self.persona}
@@ -266,12 +288,10 @@ class ClaudeAgentAdapter:
             if command.attempt_id in self._cancelled:
                 yield AdapterEvent("cancelled", final_result("Cancelled before provider launch."), session)
                 return
-            with warnings.catch_warnings():
-                # Bare allowed_tools entries intentionally pre-empt the deny callback.
-                shadowed = getattr(sdk, "CanUseToolShadowedWarning", None)
-                if isinstance(shadowed, type) and issubclass(shadowed, Warning):
-                    warnings.simplefilter("ignore", shadowed)
-                client = sdk.ClaudeSDKClient(options=options)
+            if command.execution_profile == "desktop":
+                log.warning("task %s runs the desktop profile: bypassPermissions, no workspace confinement",
+                            command.task_id[:8])
+            client = sdk.ClaudeSDKClient(options=options)
             self._clients[command.attempt_id] = client
             await within(client.connect())
             if command.attempt_id in self._cancelled:

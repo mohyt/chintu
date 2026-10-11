@@ -1,5 +1,8 @@
 import os
+import secrets
 import sqlite3
+import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -37,6 +40,47 @@ class Settings:
     runtime_evidence: RuntimeEvidence | None = None
     login_method: str | None = None
     notes_dir: Path | None = None
+    token_ttl_days: int = 30
+
+
+DEFAULT_PORT = 8765
+PAIR_ATTEMPTS, PAIR_WINDOW_SECONDS = 10, 60
+
+
+def local_secret_path(settings: Settings) -> Path:
+    """Per-start proof that a caller runs as the owner on this machine; mode 0600 beside the database."""
+    return Path(settings.database).resolve().parent / "local.secret"
+
+
+def write_local_secret(settings: Settings) -> str:
+    path = local_secret_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret = secrets.token_urlsafe(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, secret.encode())
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    return secret
+
+
+class RateLimiter:
+    """Fixed in-memory budget: at most ``limit`` attempts per rolling ``window`` seconds."""
+
+    def __init__(self, limit=PAIR_ATTEMPTS, window=PAIR_WINDOW_SECONDS):
+        self.limit, self.window = limit, window
+        self.attempts = deque()
+
+    def retry_after(self, now=None):
+        """0 when an attempt may proceed (and is recorded); otherwise seconds to wait."""
+        now = time.monotonic() if now is None else now
+        while self.attempts and now - self.attempts[0] >= self.window:
+            self.attempts.popleft()
+        if len(self.attempts) >= self.limit:
+            return max(1, int(self.window - (now - self.attempts[0])) + 1)
+        self.attempts.append(now)
+        return 0
 
 
 class BodyLimit:
@@ -111,7 +155,10 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
             if not settings.projects:
                 raise ValueError("A real provider requires at least one registered workspace")
     store = Store(settings.database, settings.queue_limit,
-                  project_paths={key: value["path"] for key, value in settings.projects.items()})
+                  project_paths={key: value["path"] for key, value in settings.projects.items()},
+                  token_ttl_days=settings.token_ttl_days)
+    local_secret = write_local_secret(settings)
+    pair_limiter = RateLimiter()
     manager = Manager(store, contract, adapter, settings.projects)
     discovery = systems_discovery if systems_discovery is not None else TailscaleDiscovery()
 
@@ -128,6 +175,7 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     app = FastAPI(title="Chintu gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(BodyLimit)
     app.state.store, app.state.manager, app.state.contract = store, manager, contract
+    app.state.local_secret = local_secret
 
     @app.exception_handler(ApiError)
     async def api_error(request, error):
@@ -219,11 +267,24 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     async def info():
         return {"service": "chintu", "protocol_version": 1, "api_version": "1.0.0"}
 
+    def local_only(request: Request, presented=None):
+        """Every local endpoint needs loopback peer, clean headers, loopback Host and the local proof."""
+        host = request.client.host if request.client else None
+        server = request.scope.get("server") or (None, DEFAULT_PORT)
+        port = server[1] if isinstance(server, (tuple, list)) and len(server) > 1 and server[1] else DEFAULT_PORT
+        if presented is None:
+            presented = request.headers.get(pairing_page.LOCAL_HEADER)
+        return pairing_page.is_local_request(host, request.headers.items(), port, local_secret, presented)
+
+    def refuse_local():
+        # One generic answer: which check failed is not disclosed.
+        return ApiError(403, "forbidden", "This endpoint is only available to the owner on this machine.")
+
     @app.get("/pair", include_in_schema=False)
     async def pair_page(request: Request):
         # Operator-only: a QR code with a fresh enrollment secret, shown on this machine's own screen.
-        host = request.client.host if request.client else None
-        if not pairing_page.is_direct_loopback(host, request.headers.keys()):
+        # A browser cannot set headers, so the proof travels as ?key= from the printed pair-url.
+        if not local_only(request, request.query_params.get("key") or ""):
             return HTMLResponse(pairing_page.refused_page(), status_code=403)
         found = await discovery.discover()
         own = next((item for item in found.get("systems", []) if item.get("is_self")), None)
@@ -236,10 +297,9 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
 
     @app.get("/local/status", include_in_schema=False)
     async def local_status(request: Request):
-        # Operator-only presence summary for the desktop companion. Loopback, non-proxied requests only.
-        host = request.client.host if request.client else None
-        if not pairing_page.is_direct_loopback(host, request.headers.keys()):
-            raise ApiError(403, "forbidden", "Local status is only available on this machine.")
+        # Operator-only presence summary for the desktop companion.
+        if not local_only(request):
+            raise refuse_local()
         found = await discovery.discover()
         own = next((item for item in found.get("systems", []) if item.get("is_self")), None)
         status = store.local_status()
@@ -248,16 +308,30 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
             "provider": next((item["provider"] for item in providers() if item.get("available")), None),
             "tailscale": {"status": found.get("status"), "reason": found.get("reason"),
                           "gateway_url": own["gateway_url"] if own else None, "name": own["name"] if own else None},
-            "pair_url": "http://127.0.0.1:%d/pair" % (request.url.port or 8765),
+            "pair_url": "http://127.0.0.1:%d/pair" % (request.url.port or DEFAULT_PORT),
         })
         return status
+
+    @app.get("/local/clients", include_in_schema=False)
+    async def local_clients(request: Request):
+        if not local_only(request):
+            raise refuse_local()
+        return {"clients": store.clients()}
+
+    @app.post("/local/clients/{client_id}/revoke", include_in_schema=False)
+    async def local_revoke(request: Request, client_id: str):
+        if not local_only(request):
+            raise refuse_local()
+        if not store.revoke(identifier(client_id)):
+            raise ApiError(404, "not_found", "Client not found.")
+        logging.getLogger("chintu.pair").info("revoked client %s locally", client_id[:8])
+        return {"client_id": client_id, "revoked": True}
 
     @app.post("/local/pairing-code", include_in_schema=False)
     async def local_pairing_code(request: Request):
         # Operator-only: the desktop companion renders this payload as a QR in its own window.
-        host = request.client.host if request.client else None
-        if not pairing_page.is_direct_loopback(host, request.headers.keys()):
-            raise ApiError(403, "forbidden", "Pairing codes are only issued on this machine.")
+        if not local_only(request):
+            raise refuse_local()
         found = await discovery.discover()
         own = next((item for item in found.get("systems", []) if item.get("is_self")), None)
         if own is None:
@@ -270,6 +344,10 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
 
     @app.post("/api/v1/pair", dependencies=[Depends(protocol)])
     async def pair(request: Request):
+        wait = pair_limiter.retry_after()
+        if wait:
+            error = ApiError(429, "rate_limited", "Too many pairing attempts; try again later.", retryable=True)
+            return JSONResponse(error.body, 429, headers={"Retry-After": str(wait)})
         value = await body(request, "PairRequest")
         paired = store.pair(value["enrollment_secret"], value["client_name"])
         logging.getLogger("chintu.pair").info("paired client %r (%s)", value["client_name"], paired["client_id"][:8])
@@ -331,18 +409,19 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
         cursor = request.query_params.get("cursor")
         if cursor is not None and len(cursor) > 512:
             raise ApiError(422, "invalid_request", "Task cursor is too long.")
-        return store.tasks_page(limit, cursor)
+        return store.tasks_page(limit, cursor, request.state.client_id)
 
     @api.get("/tasks/{task_id}")
-    async def get_task(task_id: str):
-        return store.get(identifier(task_id))
+    async def get_task(request: Request, task_id: str):
+        return store.get(identifier(task_id), request.state.client_id)
 
     @api.get("/events")
     async def events(request: Request):
         after = integer(request.query_params.get("after", "0"))
         limit = integer(request.query_params.get("limit", "100"), 1, 100)
         task_id = request.query_params.get("task_id")
-        return store.events_page(after, limit, identifier(task_id) if task_id is not None else None)
+        return store.events_page(after, limit, identifier(task_id) if task_id is not None else None,
+                                 request.state.client_id)
 
     async def mutation(request, task_id, operation, schema):
         task_id = identifier(task_id)
@@ -371,14 +450,16 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
 
     @api.post("/tasks/{task_id}/inputs/{request_id}/answer")
     async def answer(request: Request, task_id: str, request_id: str):
-        identifier(task_id), identifier(request_id)
+        identifier(request_id)
         await body(request, "AnswerInput")
+        store.get(identifier(task_id), request.state.client_id)
         raise unavailable()
 
     @api.post("/tasks/{task_id}/approvals/{request_id}/decision")
     async def decision(request: Request, task_id: str, request_id: str):
-        identifier(task_id), identifier(request_id)
+        identifier(request_id)
         await body(request, "ApprovalDecision")
+        store.get(identifier(task_id), request.state.client_id)
         raise unavailable()
 
     @api.get("/artifacts/{artifact_id}")

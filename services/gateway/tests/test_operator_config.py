@@ -382,6 +382,15 @@ class AgentRuntimeConfigTests(unittest.TestCase):
         with self.assertRaises((ValueError, ApiError)):
             self.load(value)
 
+    def test_token_ttl_days_is_optional_and_bounded(self):
+        self.assertEqual(self.load().settings.token_ttl_days, 30)
+        self.value["token_ttl_days"] = 7
+        self.assertEqual(self.load().settings.token_ttl_days, 7)
+        for bad in (0, 366, "30", 1.5, None):
+            self.value["token_ttl_days"] = bad
+            with self.assertRaises(ValueError):
+                self.load()
+
     def test_check_config_reports_enabled_agent_runtime(self):
         self.load()
         with patch("sys.argv", ["chintu-gateway", "--config", str(self.config_path), "check-config"]), \
@@ -439,7 +448,9 @@ class AgentRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(first["provider_session_id"], self.fake.SESSION)
         self.assertIn("hello; $(touch BAD)", first["result"]["summary"])
         self.assertEqual(self.fake.clients[-1].prompt, "hello; $(touch BAD)")
-        self.assertEqual(self.fake.clients[-1].options.kwargs["permission_mode"], "acceptEdits")
+        self.assertEqual(self.fake.clients[-1].options.kwargs["permission_mode"], "dontAsk")
+        self.assertEqual(self.fake.clients[-1].options.kwargs["allowed_tools"], [])
+        self.assertIn("PreToolUse", self.fake.clients[-1].options.kwargs["hooks"])
         followup = client.post(f"/api/v1/tasks/{task['task_id']}/messages", headers=headers,
             json={"message_id": uid(), "expected_task_version": first["task_version"], "instruction": "follow"})
         self.assertEqual(followup.status_code, 200, followup.text)

@@ -1,10 +1,10 @@
-import io
-import json
+import tempfile
 import unittest
-import urllib.error
+from pathlib import Path
 
-from chintu_desktop import status
+from chintu_desktop import local, status
 from chintu_desktop.status import Presence, derive_state, fetch_status, phone_line, tasks_line, tooltip
+from fake_gateway import FakeGateway, write_secret
 
 CONNECTED_PAYLOAD = {
     "clients": [{"client_id": "c1", "name": "Pixel 8", "paired_at": 1.0, "last_seen": 100.0, "connected": True}],
@@ -31,9 +31,12 @@ class DeriveStateTests(unittest.TestCase):
         self.assertEqual((state.active_tasks, state.total_tasks, state.paired_count), (2, 9, 1))
         self.assertEqual(state.gateway_url, "https://mac.tail.ts.net")
         self.assertEqual(state.provider, "claude-agent")
+        self.assertIsNone(state.fault_kind)
+        self.assertEqual(state.clients[0].client_id, "c1")
         self.assertEqual(phone_line(state), "Phone: Pixel 8 connected")
         self.assertEqual(tasks_line(state), "Active tasks: 2 (total 9)")
         self.assertEqual(tooltip(state), "Chintu: Pixel 8 connected")
+        self.assertFalse(hasattr(state, "pair_url"))  # never taken from the server
 
     def test_paired_but_away_prefers_most_recently_seen(self):
         state = derive_state(AWAY_PAYLOAD, now=0)
@@ -52,14 +55,28 @@ class DeriveStateTests(unittest.TestCase):
         self.assertIsNone(state.phone_name)
         self.assertEqual(phone_line(state), "Phone: not paired yet")
 
+    def test_explicit_clients_listing_wins_over_payload(self):
+        listing = local.parse_clients([{"client_id": "z", "name": "Zed", "connected": False, "expires_at": 5.0}])
+        state = derive_state(CONNECTED_PAYLOAD, now=0, clients=listing)
+        self.assertEqual([c.name for c in state.clients], ["Zed"])
+        self.assertEqual(state.clients[0].expires_at, 5.0)
+        self.assertEqual(state.paired_count, 1)
+
     def test_daemon_down(self):
-        state = derive_state(None, "gateway unreachable: Connection refused", port=9000, now=0)
+        state = derive_state(None, local.Unreachable("gateway unreachable: Connection refused"), port=9000, now=0)
         self.assertIs(state.presence, Presence.DOWN)
         self.assertFalse(state.daemon_running)
-        self.assertEqual(state.pair_url, "http://127.0.0.1:9000/pair")
+        self.assertEqual(state.fault_kind, "unreachable")
         self.assertIn("Connection refused", state.error)
         self.assertEqual(phone_line(state), "Phone: unknown (gateway not running)")
         self.assertEqual(tooltip(state), "Chintu: gateway not running")
+
+    def test_fault_kinds_are_carried(self):
+        for error, kind in ((local.SecretMissing("x"), "no_secret"), (local.Refused("x"), "refused"),
+                            (local.NotChintu("x"), "not_chintu"), ("poll failed: boom", "error"), (None, "unreachable")):
+            state = derive_state(None, error, now=0)
+            self.assertEqual(state.fault_kind, kind, error)
+            self.assertEqual(state.clients, ())
 
     def test_tolerates_missing_fields(self):
         state = derive_state({"service": "chintu"}, now=0)
@@ -67,50 +84,82 @@ class DeriveStateTests(unittest.TestCase):
         self.assertEqual((state.active_tasks, state.total_tasks), (0, 0))
 
 
-class _Response(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
-
 class FetchStatusTests(unittest.TestCase):
-    def test_ok(self):
-        def opener(request, timeout):
-            self.assertEqual(request.full_url, "http://127.0.0.1:8765/local/status")
-            return _Response(json.dumps(CONNECTED_PAYLOAD).encode())
-        payload, error = fetch_status(8765, opener=opener)
+    """Against the fake gateway so the proof headers travel over a real socket."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name)
+
+    def test_ok_sends_proof(self):
+        write_secret(self.repo, "correct-secret")
+        with FakeGateway(secret="correct-secret") as gateway:
+            payload, error = fetch_status(gateway.port, self.repo)
+            headers = gateway.requests[0][2]
         self.assertIsNone(error)
         self.assertTrue(payload["phone_connected"])
+        self.assertEqual(headers["X-Chintu-Local"], "correct-secret")
+        self.assertEqual(headers["Host"], "127.0.0.1:%d" % gateway.port)
 
-    def test_connection_refused(self):
-        def opener(request, timeout):
-            raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
-        payload, error = fetch_status(8765, opener=opener)
+    def test_403_is_refused_fault(self):
+        write_secret(self.repo, "wrong")
+        with FakeGateway(secret="correct-secret") as gateway:
+            payload, error = fetch_status(gateway.port, self.repo)
         self.assertIsNone(payload)
-        self.assertIn("unreachable", error)
+        self.assertEqual(error.kind, "refused")
 
-    def test_http_error(self):
-        def opener(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(b"{}"))
-        payload, error = fetch_status(8765, opener=opener)
+    def test_missing_secret_makes_no_request(self):
+        with FakeGateway(secret="correct-secret") as gateway:
+            payload, error = fetch_status(gateway.port, self.repo)
+            self.assertEqual(gateway.requests, [])
         self.assertIsNone(payload)
-        self.assertEqual(error, "gateway answered HTTP 403")
+        self.assertEqual(error.kind, "no_secret")
 
     def test_other_service_on_port(self):
-        payload, error = fetch_status(8765, opener=lambda r, timeout: _Response(b'{"service": "other"}'))
+        write_secret(self.repo, "correct-secret")
+        with FakeGateway(secret="correct-secret", service="other") as gateway:
+            payload, error = fetch_status(gateway.port, self.repo)
         self.assertIsNone(payload)
-        self.assertIn("not a Chintu gateway", error)
+        self.assertEqual(error.kind, "not_chintu")
+        self.assertIn("not a Chintu gateway", str(error))
+
+    def test_connection_refused(self):
+        write_secret(self.repo, "s")
+        client = local.LocalClient(self.repo, 1, transport=_refuse)
+        payload, error = fetch_status(1, self.repo, client=client)
+        self.assertIsNone(payload)
+        self.assertEqual(error.kind, "unreachable")
+        self.assertIn("unreachable", str(error))
+
+
+def _refuse(*args):
+    raise ConnectionRefusedError(61, "Connection refused")
 
 
 class PollerTests(unittest.TestCase):
-    def test_poll_once_reports_state(self):
+    def test_poll_once_merges_clients_listing(self):
         seen = []
-        poller = status.Poller(8765, on_state=seen.append, fetch=lambda port: (CONNECTED_PAYLOAD, None))
+        listing = local.parse_clients([{"client_id": "c1", "name": "Pixel 8", "connected": True, "expires_at": 9.0}])
+        poller = status.Poller(8765, "/repo", on_state=seen.append, fetch=lambda port, repo: (CONNECTED_PAYLOAD, None),
+                               fetch_clients=lambda port, repo: (listing, None))
         state = poller.poll_once()
         self.assertIs(state.presence, Presence.CONNECTED)
+        self.assertEqual(state.clients[0].expires_at, 9.0)
         self.assertEqual(seen, [state])
+
+    def test_poll_once_falls_back_to_payload_clients(self):
+        poller = status.Poller(8765, "/repo", fetch=lambda port, repo: (CONNECTED_PAYLOAD, None),
+                               fetch_clients=lambda port, repo: (None, local.Refused("x")))
+        state = poller.poll_once()
+        self.assertEqual([c.name for c in state.clients], ["Pixel 8"])
+
+    def test_poll_once_skips_clients_when_status_fails(self):
+        calls = []
+        poller = status.Poller(8765, "/repo", fetch=lambda port, repo: (None, local.SecretMissing("x")),
+                               fetch_clients=lambda port, repo: calls.append(1))
+        state = poller.poll_once()
+        self.assertEqual((state.fault_kind, calls), ("no_secret", []))
 
 
 if __name__ == "__main__":

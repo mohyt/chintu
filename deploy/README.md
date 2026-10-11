@@ -19,8 +19,11 @@ not a second network service. Nothing here is installed automatically.
 
 ```sh
 cp config/gateway.example.json var/gateway.local.json
+chmod 0600 var/gateway.local.json
 ```
 
+The configuration names the workspaces the agent may touch, so keep it owner-only (the
+daemon creates its own files with `umask 077`; the plist sets `Umask` and the unit `UMask`).
 Edit `var/gateway.local.json`:
 
 - `projects[].path`: absolute workspace directories the agent may run in. `execution_profiles`
@@ -33,6 +36,8 @@ Edit `var/gateway.local.json`:
 - `runtimes.claude-agent.load_user_settings`: `true` loads the owner's Claude Code user and
   project settings, including configured MCP servers; `false` runs with built-in tools only.
 - Optional `max_turns` (1–1000) and `timeout_seconds` (30–86400, default 1800).
+- Optional top-level `token_ttl_days` (1–365, default 30): how long a paired phone's
+  credential stays valid before it must pair again.
 
 Then validate without launching anything:
 
@@ -40,11 +45,39 @@ Then validate without launching anything:
 .venv/bin/chintu-gateway --config var/gateway.local.json check-config
 ```
 
-| Profile | SDK permission mode | Tools | Effects |
-| --- | --- | --- | --- |
-| `inspect` | `dontAsk` | Read, Glob, Grep, WebSearch, WebFetch only | Read-only; any call that would prompt is denied |
-| `develop` | `acceptEdits` | All built-in tools; Edit/Write/Bash/Notebook pre-approved | Edits and commands inside the workspace |
-| `desktop` | `bypassPermissions` | All built-in tools and loaded MCP servers | Works like a trusted Claude Desktop/Claude Code session |
+### Execution profiles
+
+| Profile | SDK permission mode | Tools | Confinement | Settings loaded |
+| --- | --- | --- | --- | --- |
+| `inspect` | `dontAsk` | Read, Glob, Grep | Hook: every path must resolve inside the workspace; everything else denied | user only |
+| `develop` | `dontAsk` | Read, Glob, Grep, Edit, Write, MultiEdit, NotebookEdit, Bash | Hook: file paths inside the workspace; Bash text filter (below) | user and project |
+| `desktop` | `bypassPermissions` | All built-in tools and loaded MCP servers | None: works like a trusted Claude Code session | user and project |
+
+`inspect` and `develop` register **no** bare `allowed_tools` entries, because the SDK
+auto-approves such entries before any callback runs. Instead a `PreToolUse` hook
+(`packages/agent-adapters/src/chintu_adapters/confinement.py`) decides every tool call;
+hooks run before every other permission step and a hook deny is final in every mode.
+
+What the hook guarantees:
+
+- Read, Glob, Grep, Edit, Write, MultiEdit and NotebookEdit only touch paths that
+  resolve, after following symlinks and `..`, inside the registered workspace
+  (`~` and absolute paths elsewhere are refused; a relative Glob pattern with `..` is refused).
+- Any tool the profile does not list (WebFetch, WebSearch, Agent, MCP tools, …) is refused.
+- Bash exists only in `develop` and is refused when the command text contains an
+  absolute path outside the workspace, `~`, `..`, `$HOME`, `sudo`/`su`/`doas`, a
+  `curl`/`wget` piped into a shell or interpreter, an unparsable quote, or a `cd`/`pushd`
+  whose target leaves the workspace (bare `cd` included).
+- `inspect` loads only the owner's user settings; a cloned repository's
+  `.claude/settings.json` and project hooks are untrusted and never loaded.
+
+What it does **not** guarantee: the Bash check is a text filter, not a sandbox. A
+command that passes it can still reach outside the workspace through a symlink inside
+the workspace, environment variables other than `HOME`, programs that resolve their own
+paths (`git -C`, package managers reading `~/.config`, build tools), subshells that
+compute paths, or the network. It also refuses some harmless commands (any `..`, such as
+`git log A..B`). Use `inspect` when the workspace must not be able to act on the host.
+`develop` loads project settings, so a workspace's own `.claude` hooks run there.
 
 There is no interactive approval route from the phone. Anything that would ask for
 permission (including `AskUserQuestion`) is denied with a visible progress note, and the
@@ -55,8 +88,10 @@ task continues or ends with that limitation.
 The `desktop` profile is off unless it appears explicitly in both
 `runtimes.claude-agent.profiles` and the project's `execution_profiles`. It bypasses tool
 permission prompts for that workspace, so Claude can run any command the owner could.
-Deny rules and hooks from the owner's Claude Code settings still apply. Enable it only for
-workspaces where that is acceptable, and keep `inspect` for everything else.
+Deny rules and hooks from the owner's Claude Code settings still apply. The gateway logs
+`claude-agent desktop profile enabled: bypassPermissions, no workspace confinement` at
+start and again per desktop task. Enable it only for workspaces where that is acceptable,
+and keep `inspect` for everything else.
 
 ## Connectors and MCP servers
 
@@ -75,9 +110,25 @@ they run.
 .venv/bin/chintu-gateway --config var/gateway.local.json enroll --ttl 300
 ```
 
-Enter the printed secret in the phone's pairing sheet within five minutes. The daemon must
-be running for pairing to succeed. Revoke a phone with `DELETE /api/v1/clients/me` from
-that phone, or delete the client row in the database with the daemon stopped.
+Enter the printed secret in the phone's pairing sheet within five minutes, or print the
+QR page link and open it on this machine (it carries the per-start local proof from
+`var/local.secret`, so it only works in a browser on the host):
+
+```sh
+.venv/bin/chintu-gateway --config var/gateway.local.json pair-url
+```
+
+The daemon must be running for pairing to succeed. Pairing is throttled to ten attempts
+per minute and at most five unconsumed secrets exist at once. A phone's credential
+expires after `token_ttl_days` (default 30) and the phone then pairs again. Revoke a phone
+earlier with `DELETE /api/v1/clients/me` from that phone, from the desktop companion
+(`GET /local/clients` and `POST /local/clients/{client_id}/revoke` with the local proof), or
+offline:
+
+```sh
+.venv/bin/chintu-gateway --config var/gateway.local.json revoke --client-id <id>
+.venv/bin/chintu-gateway --config var/gateway.local.json revoke --all
+```
 
 ## Expose the port privately with Tailscale Serve
 
@@ -128,5 +179,9 @@ across reboots. The unit assumes the repository at `~/dev/continuum/chintu`; edi
   `cancelled` only after the session ends; it does not undo completed effects.
 - An attempt that ends without a result is `interrupted` and quarantines that workspace
   until the offline `reconcile` command records a reviewed stop.
-- Logs contain task lifecycle lines only. Instructions and outputs live in the SQLite
-  database under `var/`, which is private to the owner.
+- Logs contain task lifecycle lines only at INFO (IDs, kinds, word counts); instruction
+  and output text appears only with `CHINTU_LOG_LEVEL=DEBUG`. Instructions and outputs
+  live in the SQLite database under `var/`, which is private to the owner, and the log
+  file is set to mode 0600 at startup.
+- Each phone sees only the tasks, events and notes it submitted; a second paired phone
+  cannot read or cancel them.

@@ -16,9 +16,11 @@ All custom inbound access is through the private Tailscale endpoint. Bind the ga
 4. Ubuntu records the enrolled client and stores a verifier rather than logging the credential.
 5. The phone keeps its credential in platform-protected storage. Provider credentials remain off the phone.
 
-Enrollment secrets require expiry, attempt limits, and consumption after a successful exchange. Tailscale restricts network reachability; application authorization identifies the client allowed to issue Chintu requests. A request body containing a client ID is not proof of identity.
+Enrollment secrets require expiry, attempt limits, and consumption after a successful exchange. Implemented: secrets expire (default five minutes), at most five are outstanding, pairing is limited to ten attempts per minute, and each phone credential expires after `token_ttl_days` (default 30). Tailscale restricts network reachability; application authorization identifies the client allowed to issue Chintu requests. A request body containing a client ID is not proof of identity, and each client sees only its own tasks, events and notes.
 
-Check authorization on every control request and event/artifact subscription. Revocation prevents new requests, closes the client's live connections, and resolves pending permission requests safely. Existing task handling after revocation is an explicit owner policy: the proposed default is to prevent new privilege grants and keep existing authorized tasks observable locally, with a separate stop-all control.
+The local setup surface (`/pair`, `/local/*`) is not reachable merely by being a local process or a web page the owner visits: it requires a loopback peer, no proxy headers, a loopback `Host`, no cross-origin browser markers, and a per-start secret from `local.secret` (mode 0600) presented as a header or, for the browser page, as the printed `pair-url` query. Any failure is one generic refusal.
+
+Check authorization on every control request and event/artifact subscription. Revocation (from the phone, from the local endpoints, or offline with `chintu-gateway revoke`) prevents new requests, closes the client's live connections, and resolves pending permission requests safely. Existing task handling after revocation is an explicit owner policy: the proposed default is to prevent new privilege grants and keep existing authorized tasks observable locally, with a separate stop-all control.
 
 If Tailscale identity headers are consumed, accept them only through the loopback Serve proxy and never trust the same header supplied through another listener. Do not accept arbitrary browser origins. Redact tokens, credentials, and enrollment data from logs.
 
@@ -34,7 +36,7 @@ V1 permission elevation uses an unlocked authenticated phone UI. Voice can resol
 
 Run Chintu as a normal Ubuntu user. Do not grant it root as a convenience. Provider processes inherit only needed credentials and tool configuration. A task selects a registered project and a tested permission profile.
 
-Path validation includes canonical resolution and an explicit policy for symlinks. The gateway's project allowlist does not, by itself, confine a subprocess that can access the rest of the user's files. Actual confinement depends on the provider runner's sandbox and/or an OS isolation environment. Validate that boundary with an attempted out-of-scope read/write before claiming a profile is restricted.
+Path validation includes canonical resolution and an explicit policy for symlinks. The gateway's project allowlist does not, by itself, confine a subprocess that can access the rest of the user's files. For the `claude-agent` runtime, `inspect` and `develop` enforce the boundary with a PreToolUse hook that resolves symlinks and `..` before checking every file-tool path, denies unlisted tools, and (in `develop`) filters Bash command text; the filter is not a sandbox, as [deploy/README.md](../deploy/README.md#execution-profiles) spells out. The boundary was validated live: an `inspect` task asked to read `~/.ssh/config` was refused by the hook while a workspace listing succeeded. Repeat that out-of-scope read/write check after any runtime upgrade before claiming a profile is restricted.
 
 If native runtime controls do not enforce the desired profile, use a dedicated execution identity or a tested container/sandbox with explicitly mounted workspaces. GUI access and credential stores require separate treatment in that environment. This is a release gate, not an assumed feature of setting a working directory.
 

@@ -90,16 +90,23 @@ class TaskWatchService : Service() {
         Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
+    /** Lock screen only ever sees a generic line; instruction and result text stay behind the unlock. */
+    private fun publicVersion(channel: String, title: String): Notification =
+        Notification.Builder(this, channel).setSmallIcon(R.drawable.chintu_icon)
+            .setContentTitle(title).setContentText("Unlock to see details").setContentIntent(open()).build()
+
     private fun working(computer: String, instruction: String, progress: String): Notification =
         Notification.Builder(this, CHANNEL_WORKING).setSmallIcon(R.drawable.chintu_icon)
             .setContentTitle("$computer is working").setContentText(progress)
             .setStyle(Notification.BigTextStyle().bigText("“${instruction.take(140)}”\n$progress"))
+            .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(publicVersion(CHANNEL_WORKING, "Chintu is working"))
             .setOngoing(true).setContentIntent(open()).build()
 
     private fun done(computer: String, state: String, summary: String): Notification =
         Notification.Builder(this, CHANNEL_DONE).setSmallIcon(R.drawable.chintu_icon)
             .setContentTitle("$computer · $state").setContentText(summary.take(120))
             .setStyle(Notification.BigTextStyle().bigText(summary.take(1200)))
+            .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(publicVersion(CHANNEL_DONE, "Chintu finished a task"))
             .setAutoCancel(true).setContentIntent(open()).build()
 
     private fun notify(notification: Notification) {

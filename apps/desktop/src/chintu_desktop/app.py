@@ -7,18 +7,23 @@ own; see pairing.py.
 """
 
 import argparse
+import functools
 import json
 import os
 import signal
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from dataclasses import asdict
 
-from . import __version__, autostart, daemon, pairing, status, tailscale
+from . import __version__, autostart, daemon, local, pairing, status, tailscale
 
 SERVE_REFRESH_EVERY_POLLS = 6  # with a 5 s poll that is every 30 s
+CONFIRM_WINDOW_SECONDS = 60    # a "Confirm ..." menu item disappears again after this long
+
+SERVE_WARNING = "Tailscale Serve exposes the gateway to every device on your tailnet."
 
 
 def _tray_backend_missing(error):
@@ -72,7 +77,8 @@ class DesktopApp:
         self.port = args.port
         self.repo = args.repo
         self.supervisor = daemon.GatewaySupervisor(self.repo, self.port, args.gateway_args)
-        self.poller = status.Poller(self.port, args.interval, on_state=self._on_state)
+        self.local = local.LocalClient(self.repo, self.port)
+        self.poller = status.Poller(self.port, self.repo, args.interval, on_state=self._on_state)
         self.state = self.poller.state
         self.serve = tailscale.ServeStatus(False, False, None, "not checked yet")
         self.tailscale_binary = tailscale.find_binary()
@@ -80,6 +86,7 @@ class DesktopApp:
         self._qr_process = None
         self._lock = threading.Lock()
         self.notice = None  # last action result, shown as a menu line
+        self._pending = None  # (kind, target, asked_at): an action awaiting its "Confirm" click
 
         from .icons import icon_set
         self.images = icon_set(size=64, mono=args.mono)
@@ -108,21 +115,38 @@ class DesktopApp:
     def _menu_items(self):
         MenuItem, Menu = self.pystray.MenuItem, self.pystray.Menu
         state = self.state
+        listening = self.supervisor.listening()
         yield MenuItem(lambda item: status.phone_line(self.state), None, enabled=False)
-        yield MenuItem(lambda item: self.supervisor.describe(), None, enabled=False)
+        yield MenuItem(self._gateway_line(listening), None, enabled=False)
+        if listening and not state.daemon_running and not self.supervisor.child_running():
+            # F8: a listener that did not prove itself gets nothing but Retry and Quit.
+            yield MenuItem(self._fault_line(), None, enabled=False)
+            yield Menu.SEPARATOR
+            yield MenuItem("Retry", self._retry)
+            if self.notice:
+                yield MenuItem(lambda item: self.notice or "", None, enabled=False)
+            yield Menu.SEPARATOR
+            yield MenuItem("Quit Chintu Desktop", self._quit)
+            return
         yield MenuItem(lambda item: status.tasks_line(self.state), None, enabled=False)
         yield MenuItem(lambda item: status.gateway_url_line(self.state), None, enabled=False)
         yield MenuItem(lambda item: self._serve_line(), None, enabled=False)
         if self.serve.available and not self.serve.enabled:
-            yield MenuItem("Enable Tailscale Serve", self._enable_serve)
+            if self._pending_is("serve"):
+                yield MenuItem("Confirm: expose the gateway to the whole tailnet", self._enable_serve_confirmed)
+                yield MenuItem("Cancel", self._cancel_pending)
+            else:
+                yield MenuItem("Enable Tailscale Serve\u2026", self._ask_enable_serve)
         yield Menu.SEPARATOR
         yield MenuItem("Show pairing QR", self._show_qr, enabled=state.daemon_running, default=True)
         yield MenuItem("Open pairing page in browser", self._open_pair_page, enabled=state.daemon_running)
         yield MenuItem("Open console", self._open_console, enabled=state.daemon_running)
+        if state.daemon_running:
+            yield MenuItem(self._phones_title(), Menu(self._phones_items))
         yield Menu.SEPARATOR
         if self.supervisor.child_running():
             yield MenuItem("Stop daemon", self._stop_daemon)
-        elif not state.daemon_running and not self.supervisor.listening():
+        elif not state.daemon_running and not listening:
             # Offered only when nothing answers on the port, so a stale pre-poll menu cannot start a second gateway.
             yield MenuItem("Start daemon", self._start_daemon)
         yield MenuItem("Open daemon log", self._open_log, enabled=self.supervisor.log_path.exists())
@@ -131,12 +155,88 @@ class DesktopApp:
         yield Menu.SEPARATOR
         yield MenuItem("Quit Chintu Desktop", self._quit)
 
+    def _gateway_line(self, listening):
+        state = self.state
+        if state.daemon_running or self.supervisor.child_running() or not listening:
+            return self.supervisor.describe(verified=state.daemon_running)
+        if state.fault_kind == "no_secret":
+            return "Gateway: not running, or not started from this repository"
+        return self.supervisor.describe(verified=False)
+
+    def _fault_line(self):
+        state = self.state
+        if state.fault_kind == "no_secret":
+            return "Port %d is in use but %s is missing" % (self.port, local.SECRET_RELATIVE)
+        if state.fault_kind == "refused":
+            return "It refused the local proof (HTTP 403)"
+        return state.error or "It did not answer like the gateway"
+
     def _serve_line(self):
         if not self.serve.available:
             return "Tailscale Serve: %s" % (self.serve.message or "unavailable")
         if self.serve.enabled:
             return "Tailscale Serve: on (%s)" % self.serve.url
         return "Tailscale Serve: off"
+
+    # --- paired phones submenu ------------------------------------------------------------
+
+    def _phones_title(self):
+        count = self.state.paired_count
+        if count == 0:
+            return "Paired phones: none"
+        return "Paired phones (%d)" % count
+
+    def _client_text(self, client, now=None):
+        parts = ["connected" if client.connected else "away"]
+        expiry = local.expiry_text(client.expires_at, time.time() if now is None else now)
+        if expiry:
+            parts.append(expiry)
+        return "%s: %s" % (client.name, ", ".join(parts))
+
+    def _phones_items(self):
+        MenuItem, Menu = self.pystray.MenuItem, self.pystray.Menu
+        clients = self.state.clients
+        if not clients:
+            yield MenuItem("No phone is paired yet", None, enabled=False)
+            return
+        for client in clients:
+            yield MenuItem(self._client_text(client), Menu(functools.partial(self._client_items, client)))
+        yield Menu.SEPARATOR
+        if self._pending_is("revoke", "*"):
+            yield MenuItem("Confirm revoke all %d phone%s" % (len(clients), "" if len(clients) == 1 else "s"),
+                           self._revoke_all_confirmed)
+            yield MenuItem("Cancel", self._cancel_pending)
+        else:
+            yield MenuItem("Revoke all phones\u2026", functools.partial(self._ask_revoke, "*", "all phones"))
+
+    def _client_items(self, client):
+        MenuItem = self.pystray.MenuItem
+        if self._pending_is("revoke", client.client_id):
+            yield MenuItem("Confirm revoke %s" % client.name,
+                           functools.partial(self._revoke_confirmed, client.client_id, client.name))
+            yield MenuItem("Cancel", self._cancel_pending)
+        else:
+            yield MenuItem("Revoke %s\u2026" % client.name,
+                           functools.partial(self._ask_revoke, client.client_id, client.name))
+
+    # --- two-step confirmations -----------------------------------------------------------
+
+    def _pending_is(self, kind, target=None):
+        pending = self._pending
+        if pending is None:
+            return False
+        if time.time() - pending[2] > CONFIRM_WINDOW_SECONDS:
+            self._pending = None
+            return False
+        return pending[0] == kind and pending[1] == target
+
+    def _ask(self, kind, target, message):
+        self._pending = (kind, target, time.time())
+        self._say(message)
+
+    def _cancel_pending(self, icon, item):
+        self._pending = None
+        self._say("Cancelled.")
 
     # --- actions (run on the tray's UI thread; anything slow goes to a thread) ----------
 
@@ -162,12 +262,60 @@ class DesktopApp:
             self.poller.poll_soon()
         self._in_background(work)
 
-    def _enable_serve(self, icon, item):
+    def _retry(self, icon, item):
+        self.notice = None
+        self.poller.poll_soon()
+
+    def _ask_enable_serve(self, icon, item):
+        self._ask("serve", None, SERVE_WARNING + " Open the menu again and choose Confirm to go ahead.")
+
+    def _enable_serve_confirmed(self, icon, item):
+        if not self._pending_is("serve"):
+            self._say("That confirmation expired; choose Enable Tailscale Serve again.")
+            return
+        self._pending = None
+
         def work():
             ok, message = tailscale.enable_serve(self.port, self.tailscale_binary)
             self.serve = tailscale.serve_status(self.port, self.tailscale_binary)
             self._say(message if ok else "Tailscale Serve: %s" % message)
         self._in_background(work)
+
+    def _ask_revoke(self, client_id, name, icon, item):
+        self._ask("revoke", client_id, "Revoking %s signs the phone out of this computer for good. Open Paired "
+                                       "phones again and choose Confirm." % name)
+
+    def _revoke_confirmed(self, client_id, name, icon, item):
+        if not self._pending_is("revoke", client_id):
+            self._say("That confirmation expired; choose Revoke again.")
+            return
+        self._pending = None
+        self._in_background(lambda: self._revoke([(client_id, name)]))
+
+    def _revoke_all_confirmed(self, icon, item):
+        if not self._pending_is("revoke", "*"):
+            self._say("That confirmation expired; choose Revoke all phones again.")
+            return
+        self._pending = None
+        targets = [(client.client_id, client.name) for client in self.state.clients]
+        self._in_background(lambda: self._revoke(targets))
+
+    def _revoke(self, targets):
+        """POST the revoke endpoint for each `(client_id, name)`; runs on a worker thread."""
+        done, failed = [], []
+        for client_id, name in targets:
+            try:
+                self.local.revoke(client_id)
+                done.append(name)
+            except (local.LocalError, ValueError) as error:
+                failed.append("%s (%s)" % (name, error))
+        if failed:
+            self._say("Could not revoke %s" % "; ".join(failed))
+        elif done:
+            self._say("Revoked %s." % ", ".join(done))
+        else:
+            self._say("No phone to revoke.")
+        self.poller.poll_soon()
 
     def _show_qr(self, icon, item):
         with self._lock:
@@ -185,14 +333,23 @@ class DesktopApp:
                 self._say("Could not open the pairing window: %s" % error)
 
     def _open_pair_page(self, icon, item):
-        webbrowser.open(self.state.pair_url)
+        # Built here from the port and var/local.secret; a URL from the server is never trusted.
+        try:
+            url = self.local.pair_url()
+        except local.SecretMissing as error:
+            self._say(str(error))
+            return
+        self._open(url)
 
     def _open_console(self, icon, item):
         # The gateway has no separate console yet; the pairing page is the operator page for now.
-        webbrowser.open(status.local_url(self.port, "/pair"))
+        self._open_pair_page(icon, item)
+
+    def _open(self, url):
+        webbrowser.open(url)
 
     def _open_log(self, icon, item):
-        webbrowser.open(self.supervisor.log_path.resolve().as_uri())
+        self._open(self.supervisor.log_path.resolve().as_uri())
 
     def _quit(self, icon, item):
         self.poller.stop()
@@ -249,13 +406,17 @@ def _path(value):
 
 
 def _snapshot(args):
-    payload, error = status.fetch_status(args.port)
-    state = status.derive_state(payload, error, port=args.port)
+    payload, error = status.fetch_status(args.port, args.repo)
+    clients = None
+    if payload is not None:
+        clients, _ = status.fetch_clients(args.port, args.repo)
+    state = status.derive_state(payload, error, port=args.port, clients=clients)
     serve = tailscale.serve_status(args.port)
     supervisor = daemon.GatewaySupervisor(args.repo, args.port, args.gateway_args)
     data = asdict(state)
     data["presence"] = state.presence.value
-    data["gateway_line"] = supervisor.describe()
+    data["secret_file"] = str(local.secret_path(args.repo))
+    data["gateway_line"] = supervisor.describe(verified=state.daemon_running)
     data["gateway_command"] = supervisor.command()
     data["tailscale_serve"] = asdict(serve)
     return data
@@ -283,7 +444,7 @@ def main(argv=None):
         if not _display_available():
             print("chintu-desktop: no display available for the pairing window.", file=sys.stderr)
             return 2
-        pairing.show_window(args.port)
+        pairing.show_window(args.port, args.repo)
         return 0
 
     if not _display_available():

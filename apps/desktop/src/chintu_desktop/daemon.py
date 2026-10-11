@@ -1,7 +1,9 @@
 """Gateway daemon supervision: port probing, argument selection and the child process.
 
-The desktop app never runs a second gateway next to one that is already listening;
-it only starts `<repo>/.venv/bin/chintu-gateway` when the loopback port is free.
+The desktop app never runs a second gateway next to something that is already
+listening; it only starts `<repo>/.venv/bin/chintu-gateway` when the loopback port
+is free. Whether a listener really is the gateway is decided by a proven
+`/local/status` call (status.py / local.py), not by the TCP probe here.
 """
 
 import os
@@ -99,12 +101,21 @@ class GatewaySupervisor:
     def listening(self):
         return self._listening(self.port)
 
-    def describe(self):
-        """One-line gateway status for the menu."""
+    def describe(self, verified=None):
+        """One-line gateway status for the menu.
+
+        `verified` says whether a proven `/local/status` call identified the listener
+        as the gateway (True), failed to (False), or has not been tried (None). A
+        port that merely accepts connections is never called the gateway.
+        """
         if self.child_running():
             return "Gateway: running (pid %d, started here)" % self._process.pid
         if self.listening():
-            return "Gateway: listening on :%d (started elsewhere)" % self.port
+            if verified:
+                return "Gateway: listening on :%d (started elsewhere)" % self.port
+            if verified is None:
+                return "Gateway: something listens on :%d (not verified yet)" % self.port
+            return "Port %d is in use by something that isn't Chintu" % self.port
         exit_code = self._exit_code()
         if exit_code is not None:
             return "Gateway: exited with code %d (see log)" % exit_code
@@ -119,7 +130,7 @@ class GatewaySupervisor:
     def start(self):
         """Launch the daemon unless one already answers. Returns a human-readable message."""
         if self.listening():
-            return self._remember("A gateway is already listening on port %d; attached to it." % self.port)
+            return self._remember("Port %d is already in use; not starting a second process on it." % self.port)
         if self.child_running():
             return self._remember("The gateway child process is already running.")
         if not self.executable.is_file():

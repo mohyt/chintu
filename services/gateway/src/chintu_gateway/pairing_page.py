@@ -1,15 +1,20 @@
 """Local pairing page: a QR code the Chintu Android app scans to add this computer.
 
-The page is served only to direct loopback requests on the operator's own machine.
-Requests arriving through Tailscale Serve carry proxy headers and are refused, so the
-enrollment secret never travels further than the screen in front of the operator.
+The page and the other ``/local`` endpoints answer only requests that prove they come
+from the operator's own session on this machine: a loopback peer, no proxy headers,
+a loopback ``Host``, no browser cross-origin markers, and the per-start local secret
+(``X-Chintu-Local`` header, or ``?key=`` for the page a browser opens). A local
+process or a DNS-rebinding web page that lacks the secret gets a generic 403.
 """
 
+import hmac
 import html
 import json
 import socket
 
 PROXY_HEADERS = ("x-forwarded-for", "tailscale-user-login", "x-forwarded-host")
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+LOCAL_HEADER = "x-chintu-local"
 
 
 def is_direct_loopback(client_host, headers):
@@ -18,6 +23,34 @@ def is_direct_loopback(client_host, headers):
         return False
     lowered = {str(k).lower() for k in headers}
     return not any(name in lowered for name in PROXY_HEADERS)
+
+
+def host_allowed(host, port):
+    """``Host`` must name loopback with the bound port; a bare name only when the port is the scheme default."""
+    if not isinstance(host, str):
+        return False
+    allowed = {f"{name}:{port}" for name in LOOPBACK_HOSTS}
+    if port == 80:
+        allowed.update(LOOPBACK_HOSTS)
+    return host.strip().lower() in allowed
+
+
+def proof_matches(presented, secret):
+    if not isinstance(presented, str) or not isinstance(secret, str) or not secret:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8", "replace"), secret.encode("utf-8"))
+
+
+def is_local_request(client_host, headers, port, secret, presented):
+    """All checks must pass; callers answer a single generic refusal for any failure."""
+    lowered = {str(k).lower(): v for k, v in headers}
+    if not is_direct_loopback(client_host, lowered):
+        return False
+    if not host_allowed(lowered.get("host"), port):
+        return False
+    if "origin" in lowered or lowered.get("sec-fetch-site", "").strip().lower() == "cross-site":
+        return False
+    return proof_matches(presented, secret)
 
 
 def pairing_payload(url, name, secret, aliases=""):
@@ -81,8 +114,8 @@ def refused_page():
 <style>body{background:#060316;color:#F4F0FF;font:16px system-ui;display:grid;place-items:center;min-height:100vh;margin:0}
 main{max-width:480px;padding:24px;text-align:center}p{color:#9691AE}</style></head>
 <body><main><h1>Open this page on the computer itself</h1>
-<p>The pairing code is only shown to a browser running on the same machine as the Chintu gateway, at
-<code>http://127.0.0.1:8765/pair</code>, so the secret never leaves that screen.</p></main></body></html>
+<p>The pairing code is only shown to a browser on the same machine as the Chintu gateway, opened from the link
+that <code>chintu-gateway pair-url</code> prints, so the secret never leaves that screen.</p></main></body></html>
 """
 
 

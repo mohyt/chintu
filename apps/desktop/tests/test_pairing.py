@@ -1,22 +1,15 @@
-import io
 import json
 import struct
+import tempfile
 import unittest
-import urllib.error
 import zlib
+from pathlib import Path
 
-from chintu_desktop import pairing
+from chintu_desktop import local, pairing
+from fake_gateway import FakeGateway, write_secret
 
 PAYLOAD = '{"chintu":1,"url":"https://mac.tail.ts.net","name":"Mac","aliases":"","secret":"not-a-real-secret"}'
 RESPONSE = {"payload": PAYLOAD, "url": "https://mac.tail.ts.net", "name": "Mac", "expires_in": 600}
-
-
-class _Response(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
 
 
 class ParseTests(unittest.TestCase):
@@ -37,33 +30,48 @@ class ParseTests(unittest.TestCase):
 
 
 class RequestTests(unittest.TestCase):
-    def test_posts_to_loopback_endpoint(self):
-        seen = {}
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name)
 
-        def opener(request, timeout):
-            seen["url"], seen["method"] = request.full_url, request.get_method()
-            return _Response(json.dumps(RESPONSE).encode())
+    def _client(self, code, body=b"{}"):
+        write_secret(self.repo, "s")
+        return local.LocalClient(self.repo, 8765, transport=lambda *a: (code, body))
 
-        code = pairing.request_pairing_code(8765, opener=opener)
-        self.assertEqual(seen, {"url": "http://127.0.0.1:8765/local/pairing-code", "method": "POST"})
+    def test_posts_to_proven_loopback_endpoint(self):
+        write_secret(self.repo, "correct-secret")
+        with FakeGateway(secret="correct-secret", pairing_body=RESPONSE) as gateway:
+            code = pairing.request_pairing_code(gateway.port, self.repo)
+            method, path, headers = gateway.requests[0]
+        self.assertEqual((method, path), ("POST", "/local/pairing-code"))
+        self.assertEqual(headers["X-Chintu-Local"], "correct-secret")
+        self.assertEqual(headers["Host"], "127.0.0.1:%d" % gateway.port)
         self.assertEqual(code.name, "Mac")
 
     def test_503_surfaces_gateway_message(self):
         body = json.dumps({"error": {"code": "unavailable", "message": "Tailscale is not connected."}}).encode()
-
-        def opener(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, 503, "Unavailable", {}, io.BytesIO(body))
-
         with self.assertRaises(pairing.PairingError) as caught:
-            pairing.request_pairing_code(8765, opener=opener)
+            pairing.request_pairing_code(8765, self.repo, client=self._client(503, body))
         self.assertEqual(str(caught.exception), "Tailscale is not connected.")
 
-    def test_connection_refused_is_readable(self):
-        def opener(request, timeout):
-            raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
-
+    def test_403_names_the_proof(self):
         with self.assertRaises(pairing.PairingError) as caught:
-            pairing.request_pairing_code(8765, opener=opener)
+            pairing.request_pairing_code(8765, self.repo, client=self._client(403))
+        self.assertIn("refused the local proof", str(caught.exception))
+
+    def test_missing_secret_is_readable(self):
+        with self.assertRaises(pairing.PairingError) as caught:
+            pairing.request_pairing_code(8765, self.repo)
+        self.assertIn("not started from this repository", str(caught.exception))
+
+    def test_connection_refused_is_readable(self):
+        def transport(*args):
+            raise ConnectionRefusedError(61, "Connection refused")
+        write_secret(self.repo, "s")
+        client = local.LocalClient(self.repo, 8765, transport=transport)
+        with self.assertRaises(pairing.PairingError) as caught:
+            pairing.request_pairing_code(8765, self.repo, client=client)
         self.assertIn("not running on port 8765", str(caught.exception))
 
 

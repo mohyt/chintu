@@ -60,9 +60,11 @@ real provider control or desktop-chat import.
 `ClaudeAgentAdapter` (provider `claude-agent`) runs the Claude Code tool loop through the
 `claude-agent-sdk` package, installed with the `agent` extra. The SDK is imported lazily;
 without it, or without a `claude` executable, `capabilities()` reports unavailable with a
-reason. Profiles map to SDK permission modes: `inspect` is `dontAsk` with read-only tools,
-`develop` is `acceptEdits` with edit/write/Bash pre-approved, and `desktop` is
-`bypassPermissions` and must be listed explicitly. Follow-ups resume the SDK session;
+reason. Profiles map to SDK permission modes and a workspace hook: `inspect` is `dontAsk`
+with Read/Glob/Grep, `develop` is `dontAsk` with file tools and Bash, both confined to the
+registered workspace by the PreToolUse hook in `confinement.py` (no bare `allowed_tools`;
+the Bash check is a textual filter, see `deploy/README.md`), and `desktop` is
+`bypassPermissions`, must be listed explicitly, and logs a warning. Follow-ups resume the SDK session;
 `cancel` sends the SDK interrupt. `tests/test_agent_sdk.py` uses `tests/fake_agent_sdk.py`,
 an in-process stand-in, so no inference or network is involved.
 

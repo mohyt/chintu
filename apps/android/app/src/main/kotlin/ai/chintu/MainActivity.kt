@@ -677,7 +677,7 @@ class MainActivity : Activity() {
         val place = city?.let { " from $it" } ?: ""
         val computer = when {
             selectedComputer == null -> "No computer is paired yet. Scan a QR code when you're ready."
-            connected -> "${selectedComputer!!.name} is online."
+            connected -> "${selectedComputer!!.name} is online" + (store.choice("profile").takeIf { it == "desktop" || it == "develop" }?.let { " in $it mode" } ?: "") + "."
             else -> "${selectedComputer!!.name} is saved. I'll connect when you speak."
         }
         return "${greetingWord()}$place. $computer Try saying: ${suggestions[suggestionIndex]}."
@@ -1284,8 +1284,9 @@ class MainActivity : Activity() {
         }
         val choices = (profiles(projects.getOrNull(project.selectedItemPosition - 1)) intersect profiles(capabilities.getOrNull(provider.selectedItemPosition - 1))).sorted()
         setOptions(profile, listOf("Choose permission profile") + choices)
-        // Default to the most capable profile this computer offers: desktop (full tools, operator opt-in), then develop, then inspect.
-        val fallback = listOf("desktop", "develop", "inspect").firstOrNull { it in choices }
+        // Default to the least capable profile: inspect is read-only inside the workspace. develop and desktop are
+        // deliberate choices made in Settings, never implied.
+        val fallback = listOf("inspect", "develop", "desktop").firstOrNull { it in choices }
         profile.setSelection(choices.indexOf(if (remembered in choices) remembered else fallback ?: "") + 1)
     }
     private fun persistChoices() {
