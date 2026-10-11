@@ -1,6 +1,9 @@
 """Menu and CLI logic exercised with a stand-in for pystray, so no display is needed."""
 
+import contextlib
+import io
 import json
+import stat
 import sys
 import tempfile
 import threading
@@ -11,8 +14,9 @@ from pathlib import Path
 
 from chintu_desktop import app as desktop_app
 from chintu_desktop import local, status, tailscale
+from chintu_desktop.layout import Layout
 from chintu_desktop.status import Presence
-from fake_gateway import FakeGateway, write_secret
+from fake_gateway import FakeGateway, repo_layout, write_secret
 
 PAYLOAD = {
     "clients": [{"client_id": "c1", "name": "Pixel 8", "paired_at": 1.0, "last_seen": 100.0, "connected": True}],
@@ -65,7 +69,8 @@ FAKE_PYSTRAY = types.SimpleNamespace(Icon=FakeIcon, MenuItem=FakeMenuItem, Menu=
 
 
 def _args(repo, **overrides):
-    values = dict(port=8765, repo=Path(repo), gateway_args=None, interval=5.0, mono=False)
+    layout = overrides.pop("layout", None) or repo_layout(repo)
+    values = dict(port=8765, repo=Path(repo), home=None, layout=layout, gateway_args=None, interval=5.0, mono=False)
     values.update(overrides)
     return types.SimpleNamespace(**values)
 
@@ -93,6 +98,10 @@ class _AppCase(unittest.TestCase):
         self._real_serve_status = desktop_app.tailscale.serve_status
         desktop_app.tailscale.serve_status = lambda port, binary=None: self._serve
         self.addCleanup(setattr, desktop_app.tailscale, "serve_status", self._real_serve_status)
+        self._install = tailscale.Installation(True, "/bin/tailscale", "Running", "Tailscale: connected", None)
+        for name, fake in (("installation", lambda binary=None: self._install), ("find_binary", lambda: "/bin/tailscale")):
+            self.addCleanup(setattr, desktop_app.tailscale, name, getattr(desktop_app.tailscale, name))
+            setattr(desktop_app.tailscale, name, fake)
         self.opened = []
         self.app = self._make_app()
 
@@ -101,6 +110,7 @@ class _AppCase(unittest.TestCase):
         app.supervisor._listening = lambda port: self.listening
         app.tailscale_binary = None
         app._open = self.opened.append
+        app._open_path = self.opened.append
         return app
 
     def _connected(self, clients=None):
@@ -143,6 +153,29 @@ class MenuTests(_AppCase):
         self.assertEqual(self.app.icon.title, "Chintu: Pixel 8 connected")
         self.assertGreaterEqual(self.app.icon.updates, 1)
 
+    def test_missing_tailscale_offers_install_instead_of_serve(self):
+        self._install = tailscale.Installation(False, None, None, "Tailscale is not installed",
+                                               "Install it with: curl ... | sh")
+        self._connected()
+        texts = _texts(self._menu())
+        self.assertIn("Tailscale is not installed", texts)
+        self.assertIn("Install Tailscale…", texts)
+        self.assertNotIn("Tailscale Serve: off", texts)
+        self.assertNotIn("Enable Tailscale Serve…", texts)
+        self.assertEqual(self.app.notice, "Install it with: curl ... | sh")
+        _find(self._menu(), "Install Tailscale…").click()
+        self.assertEqual(self.opened, [tailscale.INSTALL_URL])
+
+    def test_signed_out_tailscale_shows_the_hint(self):
+        self._install = tailscale.Installation(True, "/bin/tailscale", "NeedsLogin",
+                                               "Tailscale: installed but not signed in", "Sign in (`tailscale up`).")
+        self._connected()
+        texts = _texts(self._menu())
+        self.assertIn("Tailscale: installed but not signed in", texts)
+        self.assertIn("Sign in (`tailscale up`).", texts)
+        self.assertIn("Tailscale Serve: off", texts)
+        self.assertNotIn("Install Tailscale…", texts)
+
     def test_icon_only_changes_when_presence_changes(self):
         self.app._on_state(status.derive_state(PAYLOAD, now=0))
         first = self.app.icon.icon
@@ -176,12 +209,12 @@ class UnverifiedListenerTests(_AppCase):
         self.assertIn("port 8765 is not a Chintu gateway", texts)
         self.assertIn("Retry", texts)
 
-    def test_missing_secret_says_daemon_not_from_this_repo(self):
+    def test_missing_secret_says_daemon_not_from_this_folder(self):
         self.listening = True
         self.app._on_state(status.derive_state(None, local.SecretMissing("no secret"), now=0))
         texts = _texts(self._menu())
-        self.assertIn("Gateway: not running, or not started from this repository", texts)
-        self.assertIn("Port 8765 is in use but var/local.secret is missing", texts)
+        self.assertIn("Gateway: not running, or not started from this Chintu folder", texts)
+        self.assertIn("Port 8765 is in use but %s is missing" % self.app.layout.secret, texts)
         self.assertNotIn("Start daemon", texts)
         self.assertIn("Retry", texts)
 
@@ -220,7 +253,50 @@ class PairUrlTests(_AppCase):
         self._connected()
         _find(self._menu(), "Open pairing page in browser").click()
         self.assertEqual(self.opened, [])
-        self.assertIn("not started from this repository", self.app.notice)
+        self.assertIn("not started from this Chintu folder", self.app.notice)
+
+
+class FolderTests(_AppCase):
+    def test_open_chintu_folder_creates_and_reveals_the_data_dir(self):
+        self.assertIn("Open Chintu folder", _texts(self._menu()))
+        _find(self._menu(), "Open Chintu folder").click()
+        self.assertEqual(self.opened, [self.app.layout.home])
+        self.assertTrue(self.app.layout.home.is_dir())
+
+    def test_installed_layout_starts_the_daemon_with_the_tray(self):
+        with tempfile.TemporaryDirectory() as home:
+            layout = Layout("bundle", Path(home), ("/app/Chintu", "gateway"), Path("/app/contracts/openapi.json"))
+            app = self._make_app(layout=layout)
+            started = []
+            app.supervisor.start = lambda: started.append(True) or "Started the gateway (pid 1)"
+            self.assertTrue(app.autostart_daemon())
+            self.assertEqual(started, [True])
+            self.assertEqual(app.notice, "Started the gateway (pid 1)")
+            # Something already on the port: never start a second one.
+            self.listening = True
+            self.assertFalse(app.autostart_daemon())
+            self.assertEqual(started, [True])
+
+    def test_repo_layout_and_no_daemon_leave_the_gateway_alone(self):
+        self.app.supervisor.start = lambda: self.fail("a checkout must not auto-start the gateway")
+        self.assertFalse(self.app.autostart_daemon())
+        layout = Layout("installed", Path("/opt/chintu/home"), ("/opt/chintu/venv/bin/chintu-gateway",), None)
+        app = self._make_app(layout=layout, no_daemon=True)
+        app.supervisor.start = lambda: self.fail("--no-daemon must win")
+        self.assertFalse(app.autostart_daemon())
+
+    def test_qr_window_child_resolves_the_same_layout(self):
+        repo = self.app.layout
+        self.assertEqual(desktop_app.qr_window_command(repo, 8790, frozen=False, executable="/venv/bin/python"),
+                         ["/venv/bin/python", "-m", "chintu_desktop.app", "--port", "8790", "--repo", str(repo.repo),
+                          "qr-window"])
+        bundle = Layout("bundle", Path("/Users/me/Library/Application Support/Chintu"), ("/app/Chintu", "gateway"), None)
+        self.assertEqual(desktop_app.qr_window_command(bundle, 8765, frozen=True, executable="/app/Chintu"),
+                         ["/app/Chintu", "--port", "8765", "--home", "/Users/me/Library/Application Support/Chintu",
+                          "qr-window"])
+        parsed = desktop_app.build_parser().parse_args(
+            desktop_app.qr_window_command(bundle, 8765, frozen=True, executable="/app/Chintu")[1:])
+        self.assertEqual((parsed.command, parsed.port, parsed.home), ("qr-window", 8765, bundle.home))
 
 
 class PairedPhonesTests(_AppCase):
@@ -389,7 +465,15 @@ class CliTests(unittest.TestCase):
     def test_parser_defaults_and_subcommands(self):
         parser = desktop_app.build_parser()
         args = parser.parse_args([])
-        self.assertEqual((args.port, args.command, args.mono), (8765, None, False))
+        self.assertEqual((args.port, args.command, args.mono, args.repo, args.home), (8765, None, False, None, None))
+        args = parser.parse_args(["--home", "~/Chintu Data", "status"])
+        self.assertEqual(args.home, Path("~/Chintu Data").expanduser().resolve())
+        # The shared options are also accepted after the subcommand, and a value before it is kept.
+        args = parser.parse_args(["status", "--port", "8781", "--home", "/data"])
+        self.assertEqual((args.command, args.port, args.home, args.repo, args.gateway_args),
+                         ("status", 8781, Path("/data"), None, None))
+        args = parser.parse_args(["--port", "9000", "run"])
+        self.assertEqual((args.command, args.port), ("run", 9000))
         args = parser.parse_args(["--port", "9000", "--gateway-args", "--database x serve", "install-autostart"])
         self.assertEqual((args.port, args.command, args.gateway_args), (9000, "install-autostart", "--database x serve"))
 
@@ -403,9 +487,14 @@ class CliTests(unittest.TestCase):
             finally:
                 desktop_app.tailscale.serve_status = real
         self.assertEqual((data["presence"], data["fault_kind"]), ("down", "no_secret"))
-        self.assertEqual(data["secret_file"], str(Path(repo) / "var" / "local.secret"))
-        self.assertEqual(data["gateway_command"][0], str(Path(repo) / ".venv" / "bin" / "chintu-gateway"))
-        json.dumps(data, default=str)
+        self.assertEqual(data["secret_file"], str(Path(repo).resolve() / "var" / "local.secret"))
+        self.assertEqual(data["gateway_command"][0], str(Path(repo).resolve() / ".venv" / "bin" / "chintu-gateway"))
+        self.assertEqual(data["layout"]["kind"], "repo")
+        self.assertEqual(data["layout"]["home"], str(Path(repo).resolve() / "var"))
+        self.assertEqual(data["layout"]["config"], str(Path(repo).resolve() / "var" / "gateway.local.json"))
+        self.assertEqual(data["layout"]["contract"], str(Path(repo).resolve() / "contracts" / "openapi.json"))
+        self.assertEqual(data["layout"]["gateway_command"], data["gateway_command"][:1])
+        json.dumps(data)
 
     def test_status_snapshot_against_fake_gateway(self):
         with tempfile.TemporaryDirectory() as repo:
@@ -421,6 +510,74 @@ class CliTests(unittest.TestCase):
         self.assertEqual([c["name"] for c in data["clients"]], ["Pixel 8", "Old phone"])
         self.assertNotIn("pair_url", data)
         json.dumps(data, default=str)
+
+    def test_status_snapshot_for_a_bundle_layout(self):
+        with tempfile.TemporaryDirectory() as home:
+            layout = Layout("bundle", Path(home), ("/app/Chintu", "gateway"), Path("/app/contracts/openapi.json"))
+            real = desktop_app.tailscale.serve_status
+            desktop_app.tailscale.serve_status = lambda port, binary=None: tailscale.ServeStatus(False, False, None, "x")
+            try:
+                data = desktop_app._snapshot(_args(home, port=1, layout=layout))
+            finally:
+                desktop_app.tailscale.serve_status = real
+        self.assertEqual(data["layout"]["kind"], "bundle")
+        self.assertEqual(data["secret_file"], str(Path(home) / "local.secret"))
+        self.assertEqual(data["gateway_command"][:2], ["/app/Chintu", "gateway"])
+
+    def test_main_uses_the_cli_layout(self):
+        with tempfile.TemporaryDirectory() as repo:
+            real = desktop_app.tailscale.serve_status
+            desktop_app.tailscale.serve_status = lambda port, binary=None: tailscale.ServeStatus(False, False, None, "x")
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = desktop_app.main(["--port", "1", "--repo", repo, "status"])
+            finally:
+                desktop_app.tailscale.serve_status = real
+        self.assertEqual(code, 0)
+        data = json.loads(out.getvalue())
+        self.assertEqual(data["layout"], {"kind": "repo", "home": str(Path(repo).resolve() / "var"),
+                                          "config": str(Path(repo).resolve() / "var" / "gateway.local.json"),
+                                          "contract": str(Path(repo).resolve() / "contracts" / "openapi.json"),
+                                          "gateway_command": [str(Path(repo).resolve() / ".venv/bin/chintu-gateway")]})
+
+    def test_init_creates_the_folder_and_config_once(self):
+        with tempfile.TemporaryDirectory() as home:
+            target = Path(home) / "data"
+            layout = Layout("bundle", target, ("/app/Chintu", "gateway"), Path("/app/contracts/openapi.json"))
+            config = desktop_app._init(layout)
+            self.assertEqual(config, target / "gateway.local.json")
+            self.assertTrue(config.is_file())
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+            self.assertEqual(json.loads(config.read_text())["runtimes"]["claude-agent"]["enabled"], True)
+            # A second run keeps the operator's file: no rewrite, same path printed.
+            config.write_text("{\"edited\": true}\n")
+            self.assertEqual(desktop_app._init(layout), config)
+            self.assertEqual(config.read_text(), "{\"edited\": true}\n")
+
+    def test_init_prints_the_config_path_and_never_writes_into_a_checkout(self):
+        with tempfile.TemporaryDirectory() as repo:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = desktop_app.main(["--repo", repo, "init"])
+            self.assertEqual(code, 0)
+            self.assertEqual(out.getvalue().strip(), str(Path(repo).resolve() / "var" / "gateway.local.json"))
+            self.assertTrue((Path(repo) / "var").is_dir())
+            self.assertFalse((Path(repo) / "var" / "gateway.local.json").exists())
+
+    def test_gateway_subcommand_dispatches_to_the_gateway_cli(self):
+        out = io.StringIO()
+        saved = sys.argv
+        try:
+            with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as caught:
+                desktop_app.main(["gateway", "--help"])
+            self.assertEqual(sys.argv[0], "chintu-gateway")
+        finally:
+            sys.argv = saved
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn("check-config", out.getvalue())
+        self.assertIn("serve", out.getvalue())
 
 
 if __name__ == "__main__":

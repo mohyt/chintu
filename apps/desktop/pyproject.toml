@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chintu-desktop"
-version = "0.1.0"
+version = "0.4.0"
 description = "Menu bar / top panel companion that watches and supervises the local Chintu gateway"
 requires-python = ">=3.12"
 # Deliberately light: the tray toolkit and the image library for the procedurally drawn icon.
@@ -16,3 +16,7 @@ chintu-desktop = "chintu_desktop.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Autostart templates ship inside the package so the PyInstaller bundle and the wheel carry them.
+"chintu_desktop.autostart" = ["*.plist", "*.desktop"]

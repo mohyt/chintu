@@ -4,7 +4,7 @@ from pathlib import Path
 
 from chintu_desktop import local, status
 from chintu_desktop.status import Presence, derive_state, fetch_status, phone_line, tasks_line, tooltip
-from fake_gateway import FakeGateway, write_secret
+from fake_gateway import FakeGateway, repo_layout, write_secret
 
 CONNECTED_PAYLOAD = {
     "clients": [{"client_id": "c1", "name": "Pixel 8", "paired_at": 1.0, "last_seen": 100.0, "connected": True}],
@@ -91,11 +91,12 @@ class FetchStatusTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        self.layout = repo_layout(self.repo)
 
     def test_ok_sends_proof(self):
         write_secret(self.repo, "correct-secret")
         with FakeGateway(secret="correct-secret") as gateway:
-            payload, error = fetch_status(gateway.port, self.repo)
+            payload, error = fetch_status(gateway.port, self.layout)
             headers = gateway.requests[0][2]
         self.assertIsNone(error)
         self.assertTrue(payload["phone_connected"])
@@ -105,13 +106,13 @@ class FetchStatusTests(unittest.TestCase):
     def test_403_is_refused_fault(self):
         write_secret(self.repo, "wrong")
         with FakeGateway(secret="correct-secret") as gateway:
-            payload, error = fetch_status(gateway.port, self.repo)
+            payload, error = fetch_status(gateway.port, self.layout)
         self.assertIsNone(payload)
         self.assertEqual(error.kind, "refused")
 
     def test_missing_secret_makes_no_request(self):
         with FakeGateway(secret="correct-secret") as gateway:
-            payload, error = fetch_status(gateway.port, self.repo)
+            payload, error = fetch_status(gateway.port, self.layout)
             self.assertEqual(gateway.requests, [])
         self.assertIsNone(payload)
         self.assertEqual(error.kind, "no_secret")
@@ -119,15 +120,15 @@ class FetchStatusTests(unittest.TestCase):
     def test_other_service_on_port(self):
         write_secret(self.repo, "correct-secret")
         with FakeGateway(secret="correct-secret", service="other") as gateway:
-            payload, error = fetch_status(gateway.port, self.repo)
+            payload, error = fetch_status(gateway.port, self.layout)
         self.assertIsNone(payload)
         self.assertEqual(error.kind, "not_chintu")
         self.assertIn("not a Chintu gateway", str(error))
 
     def test_connection_refused(self):
         write_secret(self.repo, "s")
-        client = local.LocalClient(self.repo, 1, transport=_refuse)
-        payload, error = fetch_status(1, self.repo, client=client)
+        client = local.LocalClient(self.layout, 1, transport=_refuse)
+        payload, error = fetch_status(1, self.layout, client=client)
         self.assertIsNone(payload)
         self.assertEqual(error.kind, "unreachable")
         self.assertIn("unreachable", str(error))
@@ -141,23 +142,23 @@ class PollerTests(unittest.TestCase):
     def test_poll_once_merges_clients_listing(self):
         seen = []
         listing = local.parse_clients([{"client_id": "c1", "name": "Pixel 8", "connected": True, "expires_at": 9.0}])
-        poller = status.Poller(8765, "/repo", on_state=seen.append, fetch=lambda port, repo: (CONNECTED_PAYLOAD, None),
-                               fetch_clients=lambda port, repo: (listing, None))
+        poller = status.Poller(8765, None, on_state=seen.append, fetch=lambda port, layout: (CONNECTED_PAYLOAD, None),
+                               fetch_clients=lambda port, layout: (listing, None))
         state = poller.poll_once()
         self.assertIs(state.presence, Presence.CONNECTED)
         self.assertEqual(state.clients[0].expires_at, 9.0)
         self.assertEqual(seen, [state])
 
     def test_poll_once_falls_back_to_payload_clients(self):
-        poller = status.Poller(8765, "/repo", fetch=lambda port, repo: (CONNECTED_PAYLOAD, None),
-                               fetch_clients=lambda port, repo: (None, local.Refused("x")))
+        poller = status.Poller(8765, None, fetch=lambda port, layout: (CONNECTED_PAYLOAD, None),
+                               fetch_clients=lambda port, layout: (None, local.Refused("x")))
         state = poller.poll_once()
         self.assertEqual([c.name for c in state.clients], ["Pixel 8"])
 
     def test_poll_once_skips_clients_when_status_fails(self):
         calls = []
-        poller = status.Poller(8765, "/repo", fetch=lambda port, repo: (None, local.SecretMissing("x")),
-                               fetch_clients=lambda port, repo: calls.append(1))
+        poller = status.Poller(8765, None, fetch=lambda port, layout: (None, local.SecretMissing("x")),
+                               fetch_clients=lambda port, layout: calls.append(1))
         state = poller.poll_once()
         self.assertEqual((state.fault_kind, calls), ("no_secret", []))
 

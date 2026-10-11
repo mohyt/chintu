@@ -8,6 +8,9 @@ records every request so tests can assert on what the tray sent.
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from chintu_desktop.layout import Layout
 
 STATUS = {
     "service": "chintu", "provider": "claude-agent", "phone_connected": True, "active_tasks": 1, "total_tasks": 4,
@@ -122,9 +125,14 @@ class FakeGateway:
         return [path for m, path, _ in self.requests if method is None or m == method]
 
 
-def write_secret(repo, secret):
-    """Create `<repo>/var/local.secret` the way the gateway does."""
-    path = repo / "var" / "local.secret"
+def repo_layout(repo):
+    """The repository layout rooted at a temporary directory: data in `<repo>/var/`."""
+    return Layout.detect(repo=repo, env={})
+
+
+def write_secret(target, secret):
+    """Create `local.secret` the way the gateway does, for a `Layout` or a repository root."""
+    path = target.secret if isinstance(target, Layout) else Path(target) / "var" / "local.secret"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(secret + "\n")
     path.chmod(0o600)

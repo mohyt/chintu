@@ -26,3 +26,7 @@ apps/android/.tooling/
 *.worker.lock
 notes/
 *.log
+
+# Release signing (local copy of ~/Library/Application Support/Chintu/signing) and packaged APKs
+apps/android/keystore.properties
+dist/

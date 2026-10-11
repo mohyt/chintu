@@ -102,3 +102,53 @@ class CommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallationTests(unittest.TestCase):
+    def test_not_installed_gives_platform_hint(self):
+        linux = tailscale.installation(binary=None, find=lambda: None, platform="linux",
+                                       runner=lambda *a, **k: self.fail("must not run"))
+        self.assertFalse(linux.installed)
+        self.assertFalse(linux.connected)
+        self.assertEqual(linux.message, "Tailscale is not installed")
+        self.assertIn(tailscale.LINUX_INSTALL_COMMAND, linux.hint)
+        mac = tailscale.installation(binary=None, find=lambda: None, platform="darwin")
+        self.assertIn(tailscale.INSTALL_URL, mac.hint)
+
+    def test_running_backend_is_connected(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout='{"BackendState": "Running", "Self": {}}', stderr="")
+
+        result = tailscale.installation(binary="/bin/tailscale", runner=runner)
+        self.assertEqual(calls, [["/bin/tailscale", "status", "--json"]])
+        self.assertTrue(result.installed)
+        self.assertTrue(result.connected)
+        self.assertEqual(result.backend_state, "Running")
+        self.assertIsNone(result.hint)
+
+    def test_needs_login_and_stopped_carry_hints(self):
+        for state, fragment in (("NeedsLogin", "not signed in"), ("Stopped", "stopped")):
+            def runner(command, **kwargs):
+                return subprocess.CompletedProcess(command, 0, stdout='{"BackendState": "%s"}' % state, stderr="")
+            result = tailscale.installation(binary="/bin/tailscale", runner=runner)
+            self.assertTrue(result.installed)
+            self.assertFalse(result.connected)
+            self.assertIn(fragment, result.message)
+            self.assertIn("tailscale up", result.hint)
+
+    def test_daemon_not_answering(self):
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="failed to connect to local tailscaled\n")
+        result = tailscale.installation(binary="/bin/tailscale", runner=runner)
+        self.assertTrue(result.installed)
+        self.assertFalse(result.connected)
+        self.assertIn("failed to connect to local tailscaled", result.message)
+
+        def timeout(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, 8)
+        result = tailscale.installation(binary="/bin/tailscale", runner=timeout)
+        self.assertTrue(result.installed)
+        self.assertIn("did not answer", result.message)

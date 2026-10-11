@@ -6,7 +6,7 @@ import zlib
 from pathlib import Path
 
 from chintu_desktop import local, pairing
-from fake_gateway import FakeGateway, write_secret
+from fake_gateway import FakeGateway, repo_layout, write_secret
 
 PAYLOAD = '{"chintu":1,"url":"https://mac.tail.ts.net","name":"Mac","aliases":"","secret":"not-a-real-secret"}'
 RESPONSE = {"payload": PAYLOAD, "url": "https://mac.tail.ts.net", "name": "Mac", "expires_in": 600}
@@ -34,15 +34,16 @@ class RequestTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        self.layout = repo_layout(self.repo)
 
     def _client(self, code, body=b"{}"):
         write_secret(self.repo, "s")
-        return local.LocalClient(self.repo, 8765, transport=lambda *a: (code, body))
+        return local.LocalClient(self.layout, 8765, transport=lambda *a: (code, body))
 
     def test_posts_to_proven_loopback_endpoint(self):
         write_secret(self.repo, "correct-secret")
         with FakeGateway(secret="correct-secret", pairing_body=RESPONSE) as gateway:
-            code = pairing.request_pairing_code(gateway.port, self.repo)
+            code = pairing.request_pairing_code(gateway.port, self.layout)
             method, path, headers = gateway.requests[0]
         self.assertEqual((method, path), ("POST", "/local/pairing-code"))
         self.assertEqual(headers["X-Chintu-Local"], "correct-secret")
@@ -62,14 +63,15 @@ class RequestTests(unittest.TestCase):
 
     def test_missing_secret_is_readable(self):
         with self.assertRaises(pairing.PairingError) as caught:
-            pairing.request_pairing_code(8765, self.repo)
-        self.assertIn("not started from this repository", str(caught.exception))
+            pairing.request_pairing_code(8765, self.layout)
+        self.assertIn("not started from this Chintu folder", str(caught.exception))
+        self.assertIn(str(self.layout.secret), str(caught.exception))
 
     def test_connection_refused_is_readable(self):
         def transport(*args):
             raise ConnectionRefusedError(61, "Connection refused")
         write_secret(self.repo, "s")
-        client = local.LocalClient(self.repo, 8765, transport=transport)
+        client = local.LocalClient(self.layout, 8765, transport=transport)
         with self.assertRaises(pairing.PairingError) as caught:
             pairing.request_pairing_code(8765, self.repo, client=client)
         self.assertIn("not running on port 8765", str(caught.exception))

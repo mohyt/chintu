@@ -1,8 +1,10 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -56,6 +58,32 @@ class ClaudeAgentAdapterTests(unittest.IsolatedAsyncioTestCase):
             caps = ClaudeAgentAdapter(executable, sdk=fake).capabilities()
             self.assertFalse(caps.available)
             self.assertIn("not found", caps.reason)
+
+    def test_default_name_falls_back_to_the_sdk_bundled_cli(self):
+        # The SDK package ships its own Claude Code CLI; "claude" uses it when PATH has none.
+        package = self.root / "site-packages" / "claude_agent_sdk"
+        (package / "_bundled").mkdir(parents=True)
+        bundled = package / "_bundled" / "claude"
+        bundled.write_text("#!/bin/sh\nexit 0\n")
+        bundled.chmod(0o700)
+        sdk = types.SimpleNamespace(**{**vars(fake), "__file__": str(package / "__init__.py")})
+        with patch.dict(os.environ, {"PATH": str(self.root / "empty-bin")}):
+            adapter = ClaudeAgentAdapter("claude", sdk=sdk)
+            self.assertEqual(adapter.bundled_executable(), str(bundled))
+            self.assertEqual(adapter.resolved_executable(), str(bundled))
+            self.assertTrue(adapter.capabilities().available)
+            options = adapter.build_options(self.command(), self.root).kwargs
+            self.assertEqual(options["cli_path"], str(bundled))
+            # Only the default name falls back; another bare name still has to be on PATH.
+            other = ClaudeAgentAdapter("my-claude", sdk=sdk).capabilities()
+            self.assertFalse(other.available)
+            self.assertIn("not found", other.reason)
+            # Without a bundled CLI the default name is unavailable and says why.
+            bundled.unlink()
+            reason = ClaudeAgentAdapter("claude", sdk=sdk).capabilities().reason
+            self.assertIn("not found", reason)
+            self.assertIn("bundled", reason)
+            self.assertIsNone(ClaudeAgentAdapter("claude", sdk=fake).bundled_executable())
 
     def test_unknown_profile_configuration_is_unavailable(self):
         caps = self.adapter(profiles=("inspect", "unrestricted")).capabilities()

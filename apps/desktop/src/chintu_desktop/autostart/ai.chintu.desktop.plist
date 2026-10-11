@@ -6,13 +6,11 @@
   <string>ai.chintu.desktop</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__REPO__/.venv/bin/chintu-desktop</string>
-    <string>--repo</string>
-    <string>__REPO__</string>
+    <string>__EXEC__</string>
+    <string>--home</string>
+    <string>__DATA__</string>
     <string>run</string>
   </array>
-  <key>WorkingDirectory</key>
-  <string>__REPO__</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -34,8 +32,8 @@
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
   <key>StandardOutPath</key>
-  <string>__REPO__/var/desktop.log</string>
+  <string>__DATA__/desktop.log</string>
   <key>StandardErrorPath</key>
-  <string>__REPO__/var/desktop.err.log</string>
+  <string>__DATA__/desktop.err.log</string>
 </dict>
 </plist>

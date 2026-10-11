@@ -3,7 +3,7 @@
 `derive_state` is a pure function from one `/local/status` payload (or a fetch
 error) to a `DesktopState`; the tray only renders that value. `fetch_status` and
 `fetch_clients` are the only network calls, made through `local.LocalClient`,
-which carries the per-start secret from `var/local.secret` on every request.
+which carries the per-start secret from the layout's `local.secret` on every request.
 """
 
 import enum
@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 
 from . import local
+from .layout import Layout
 from .local import DEFAULT_PORT, LocalError  # noqa: F401 - DEFAULT_PORT is re-exported for the other modules
 
 POLL_INTERVAL_SECONDS = 5.0
@@ -48,23 +49,27 @@ def local_url(port, path):
     return "http://127.0.0.1:%d%s" % (port, path)
 
 
-def fetch_status(port=DEFAULT_PORT, repo=None, client=None):
+def _client(layout, port):
+    return local.LocalClient(layout or Layout.detect(), port)
+
+
+def fetch_status(port=DEFAULT_PORT, layout=None, client=None):
     """Return `(payload, error)`; exactly one of them is `None`.
 
-    `error` is a `local.LocalError`: `SecretMissing` when `var/local.secret` is
-    absent, `Unreachable` when nothing answers, `Refused` on a 403, `NotChintu`
+    `error` is a `local.LocalError`: `SecretMissing` when the layout's `local.secret`
+    is absent, `Unreachable` when nothing answers, `Refused` on a 403, `NotChintu`
     when the listener does not answer like a gateway.
     """
-    client = client or local.LocalClient(repo, port)
+    client = client or _client(layout, port)
     try:
         return client.status(), None
     except LocalError as error:
         return None, error
 
 
-def fetch_clients(port=DEFAULT_PORT, repo=None, client=None):
+def fetch_clients(port=DEFAULT_PORT, layout=None, client=None):
     """Return `(clients, error)` from `GET /local/clients`."""
-    client = client or local.LocalClient(repo, port)
+    client = client or _client(layout, port)
     try:
         return client.clients(), None
     except LocalError as error:
@@ -159,11 +164,11 @@ def tooltip(state):
 class Poller(threading.Thread):
     """Polls `/local/status` (and `/local/clients`) every `interval` seconds and hands each state to `on_state`."""
 
-    def __init__(self, port=DEFAULT_PORT, repo=None, interval=POLL_INTERVAL_SECONDS, on_state=None,
+    def __init__(self, port=DEFAULT_PORT, layout=None, interval=POLL_INTERVAL_SECONDS, on_state=None,
                  fetch=fetch_status, fetch_clients=fetch_clients):
         super().__init__(name="chintu-desktop-poller", daemon=True)
         self.port = port
-        self.repo = repo
+        self.layout = layout
         self.interval = interval
         self.on_state = on_state or (lambda state: None)
         self.fetch = fetch
@@ -173,10 +178,10 @@ class Poller(threading.Thread):
         self.state = derive_state(None, "not polled yet", port=port)
 
     def poll_once(self):
-        payload, error = self.fetch(self.port, self.repo)
+        payload, error = self.fetch(self.port, self.layout)
         clients = None
         if payload is not None:
-            clients, _ = self.fetch_clients(self.port, self.repo)  # the status payload's list is the fallback
+            clients, _ = self.fetch_clients(self.port, self.layout)  # the status payload's list is the fallback
         self.state = derive_state(payload, error, port=self.port, clients=clients)
         self.on_state(self.state)
         return self.state

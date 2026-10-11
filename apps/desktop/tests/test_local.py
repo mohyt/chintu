@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from chintu_desktop import local
-from fake_gateway import FakeGateway, write_secret
+from fake_gateway import FakeGateway, repo_layout, write_secret
 
 
 def _free_port():
@@ -20,22 +20,25 @@ class SecretTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        self.layout = repo_layout(self.repo)
 
-    def test_path_is_var_local_secret_under_repo(self):
-        self.assertEqual(local.secret_path(self.repo), self.repo / "var" / "local.secret")
+    def test_path_is_the_layout_secret(self):
+        self.assertEqual(local.secret_path(self.layout), self.repo.resolve() / "var" / "local.secret")
+        self.assertEqual(local.secret_path(self.layout), self.layout.secret)
 
     def test_missing_or_empty_file_raises(self):
         with self.assertRaises(local.SecretMissing) as caught:
-            local.read_secret(self.repo)
+            local.read_secret(self.layout)
         self.assertEqual(caught.exception.kind, "no_secret")
         self.assertIn("not running", str(caught.exception))
+        self.assertIn(str(self.layout.home), str(caught.exception))
         write_secret(self.repo, "")
         with self.assertRaises(local.SecretMissing):
-            local.read_secret(self.repo)
+            local.read_secret(self.layout)
 
     def test_reads_fresh_value_on_every_call(self):
         write_secret(self.repo, "first")
-        client = local.LocalClient(self.repo, 1)
+        client = local.LocalClient(self.layout, 1)
         self.assertEqual(client.secret(), "first")
         write_secret(self.repo, "second")  # the daemon restarted
         self.assertEqual(client.secret(), "second")
@@ -43,7 +46,7 @@ class SecretTests(unittest.TestCase):
 
     def test_whitespace_is_stripped(self):
         write_secret(self.repo, "  abc  ")
-        self.assertEqual(local.read_secret(self.repo), "abc")
+        self.assertEqual(local.read_secret(self.layout), "abc")
 
 
 class HeaderTests(unittest.TestCase):
@@ -63,7 +66,7 @@ class HeaderTests(unittest.TestCase):
                 seen.append((port, method, path, dict(headers), body))
                 return 200, b'{"ok": true}'
 
-            client = local.LocalClient(repo, 9000, transport=transport)
+            client = local.LocalClient(repo_layout(repo), 9000, transport=transport)
             client.get_json("/local/status")
             write_secret(repo, "two")
             client.post_json("/local/clients/c1/revoke")
@@ -83,7 +86,7 @@ class HeaderTests(unittest.TestCase):
     def test_no_request_without_secret(self):
         calls = []
         with tempfile.TemporaryDirectory() as tmp:
-            client = local.LocalClient(tmp, 9000, transport=lambda *a: calls.append(a) or (200, b"{}"))
+            client = local.LocalClient(repo_layout(tmp), 9000, transport=lambda *a: calls.append(a) or (200, b"{}"))
             with self.assertRaises(local.SecretMissing):
                 client.status()
         self.assertEqual(calls, [])
@@ -94,7 +97,7 @@ class ErrorMappingTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         write_secret(Path(self.tmp.name), "s")
-        return local.LocalClient(self.tmp.name, 9000, transport=lambda *a: (code, body))
+        return local.LocalClient(repo_layout(self.tmp.name), 9000, transport=lambda *a: (code, body))
 
     def test_403_is_refused(self):
         with self.assertRaises(local.Refused) as caught:
@@ -120,7 +123,7 @@ class ErrorMappingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             write_secret(Path(tmp), "s")
             with self.assertRaises(local.Unreachable) as caught:
-                local.LocalClient(tmp, 9000, transport=transport).status()
+                local.LocalClient(repo_layout(tmp), 9000, transport=transport).status()
         self.assertEqual(caught.exception.kind, "unreachable")
 
     def test_revoke_rejects_malformed_ids(self):
@@ -138,11 +141,12 @@ class ListenerVerificationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        self.layout = repo_layout(self.repo)
 
     def test_right_secret_is_verified(self):
         write_secret(self.repo, "correct-secret")
         with FakeGateway(secret="correct-secret") as gateway:
-            payload = local.LocalClient(self.repo, gateway.port).status()
+            payload = local.LocalClient(self.layout, gateway.port).status()
             method, path, headers = gateway.requests[0]
         self.assertEqual(payload["service"], "chintu")
         self.assertEqual((method, path), ("GET", "/local/status"))
@@ -154,23 +158,23 @@ class ListenerVerificationTests(unittest.TestCase):
         write_secret(self.repo, "stale-secret")
         with FakeGateway(secret="correct-secret") as gateway:
             with self.assertRaises(local.Refused):
-                local.LocalClient(self.repo, gateway.port).status()
+                local.LocalClient(self.layout, gateway.port).status()
 
     def test_other_service_on_port_is_not_chintu(self):
         write_secret(self.repo, "correct-secret")
         with FakeGateway(secret="correct-secret", service="someone-else") as gateway:
             with self.assertRaises(local.NotChintu):
-                local.LocalClient(self.repo, gateway.port).status()
+                local.LocalClient(self.layout, gateway.port).status()
 
     def test_nothing_listening_is_unreachable(self):
         write_secret(self.repo, "s")
         with self.assertRaises(local.Unreachable):
-            local.LocalClient(self.repo, _free_port(), timeout=1.0).status()
+            local.LocalClient(self.layout, _free_port(), timeout=1.0).status()
 
     def test_clients_listing_and_revoke(self):
         write_secret(self.repo, "correct-secret")
         with FakeGateway(secret="correct-secret") as gateway:
-            client = local.LocalClient(self.repo, gateway.port)
+            client = local.LocalClient(self.layout, gateway.port)
             clients = client.clients()
             self.assertEqual([c.name for c in clients], ["Pixel 8", "Old phone"])
             self.assertEqual(clients[0].expires_at, 10 * 86400.0)

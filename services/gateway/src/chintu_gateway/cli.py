@@ -33,6 +33,17 @@ def _private_log_files(log_file):
             pass
 
 
+MAC_TAILSCALE_APP_BINARY = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+
+def tailscale_installed(which=None, exists=os.path.exists, platform=sys.platform):
+    """The daemon is only reachable from the phone over the tailnet, so say so loudly at start when it is missing."""
+    import shutil
+    if (which or shutil.which)("tailscale"):
+        return True
+    return platform == "darwin" and exists(MAC_TAILSCALE_APP_BINARY)
+
+
 def _pair_url(settings, port):
     path = local_secret_path(settings)
     try:
@@ -131,6 +142,10 @@ def main():
                         **({"filename": log_file} if log_file else {}))
     _private_log_files(log_file)
     logging.getLogger("chintu").info("Chintu gateway starting: provider=%s port=%s", getattr(adapter, "provider", "none"), args.port)
+    if not tailscale_installed():
+        logging.getLogger("chintu").warning(
+            "Tailscale is not installed on this computer; the phone cannot reach the gateway until it is "
+            "(https://tailscale.com/download), and Tailscale Serve is enabled for port %s", args.port)
     uvicorn.run(app, host="127.0.0.1", port=args.port, workers=1, access_log=False)
 
 

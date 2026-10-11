@@ -2,8 +2,7 @@
 Type=Application
 Name=Chintu Desktop
 Comment=Phone presence and gateway supervisor for Chintu
-Exec=__REPO__/.venv/bin/chintu-desktop --repo __REPO__ run
-Path=__REPO__
+Exec="__EXEC__" --home "__DATA__" run
 Icon=network-wireless
 Terminal=false
 Categories=Utility;

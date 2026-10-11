@@ -173,6 +173,61 @@ journalctl --user -u chintu-gateway -f
 across reboots. The unit assumes the repository at `~/dev/continuum/chintu`; edit
 `WorkingDirectory` and `ExecStart` otherwise.
 
+## Debian package (Ubuntu 24.04, amd64 and arm64)
+
+`scripts/package/build-deb.py` produces `dist/chintu-desktop_<version>_amd64.deb` and
+`dist/chintu-desktop_<version>_arm64.deb` (the release workflow runs it on an
+`ubuntu-24.04` runner; on a Mac use `scripts/package/build-deb.sh`, which runs the same
+script inside `python:3.12-slim` with Docker). The package carries the tray app, the
+gateway, the adapters and every runtime dependency as wheels, pinned in
+[`packaging/debian/requirements-linux.txt`](../packaging/debian/requirements-linux.txt)
+to the versions in `requirements-dev.lock`.
+
+Install, then check the layout the commands picked up:
+
+```sh
+sudo apt install ./chintu-desktop_0.4.0_amd64.deb   # or _arm64.deb
+chintu-desktop --version
+chintu-desktop status | head -40                    # layout.kind is "installed"
+```
+
+Where things live after installation:
+
+| Path | Contents |
+| --- | --- |
+| `/opt/chintu/wheels/` | the three `chintu_*` wheels plus the pinned dependency wheels (incl. `claude-agent-sdk`, which bundles the Claude Code CLI) |
+| `/opt/chintu/venv/` | created by `postinst`, not shipped: `python3 -m venv --system-site-packages`, then `pip install --no-index --no-deps` of every wheel above, offline |
+| `/opt/chintu/share/chintu/openapi.json` | the API contract; the launchers export `CHINTU_CONTRACT` pointing here |
+| `/opt/chintu/bin/chintu-desktop`, `/opt/chintu/bin/chintu-gateway` | launchers that `exec` the virtualenv's console scripts; `/usr/bin/chintu-desktop` and `/usr/bin/chintu-gateway` are symlinks to them |
+| `/usr/share/applications/ai.chintu.desktop`, `/usr/share/icons/hicolor/256x256/apps/chintu.png` | the "Chintu" entry in the app grid (`chintu-desktop run`) and its icon |
+| `~/.local/share/chintu/` (or `$XDG_DATA_HOME/chintu`, `CHINTU_HOME`) | per-user data, created on first use: `gateway.local.json`, `chintu.sqlite3`, `local.secret`, logs |
+
+The virtualenv sees the system site-packages so that `gi` from `python3-gi` and the
+AppIndicator typelib (`gir1.2-ayatanaappindicator3-0.1`) are importable; both are in
+`Depends`, together with `python3-tk` for the pairing window. Removing the package
+(`sudo apt remove chintu-desktop`) deletes the virtualenv again; nothing under the user's
+home is touched. Upgrading recreates the virtualenv from the new package's wheels.
+
+`postinst` also checks for Tailscale: when the `tailscale` command is missing it prints a
+framed notice with the install one-liner (`curl -fsSL https://tailscale.com/install.sh | sh
+&& sudo tailscale up`); when it is installed but `tailscale status` fails or reports
+"Logged out"/"stopped", it prints a one-line hint to run `sudo tailscale up`. Neither
+case fails the installation. Tailscale itself is not packaged here; it is a
+`Recommends` and comes from Tailscale's own apt repository. The phone can only reach the
+gateway once Tailscale is up and Serve is enabled ("Enable Tailscale Serve…" in the tray,
+or `tailscale serve --bg 8765`).
+
+On GNOME the tray icon is an AppIndicator, so the shell extension
+`gnome-shell-extension-appindicator` (a `Recommends`) must be installed and enabled:
+`gnome-extensions enable ubuntu-appindicators@ubuntu.com`, then log out and in. Without
+it the app runs but no icon is shown. The first run from the app grid or
+`chintu-desktop run` writes a default `gateway.local.json` into the user's Chintu
+folder and offers "Start daemon" in the menu; `chintu-desktop install-autostart` adds a
+`~/.config/autostart/chintu-desktop.desktop` entry so the tray starts at login
+(`uninstall-autostart` removes it). The gateway commands in the sections above work the
+same way with `chintu-gateway --config ~/.local/share/chintu/gateway.local.json ...`
+instead of `.venv/bin/chintu-gateway --config var/gateway.local.json ...`.
+
 ## Operating notes
 
 - One task runs at a time; others queue. Cancellation sends the SDK interrupt and reports

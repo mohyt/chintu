@@ -7,7 +7,7 @@ on GNOME) never competes with Tk for the main thread.
 
 Each request mints a fresh secret on the gateway, so the window only asks when it
 opens or when the user presses Refresh, never on a timer. Like every `/local/*`
-call it carries the per-start proof from `var/local.secret` (see local.py).
+call it carries the per-start proof from the layout's `local.secret` (see local.py).
 """
 
 import base64
@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 
 from . import local
+from .layout import Layout
 from .status import DEFAULT_PORT
 
 BACKGROUND = "#060316"
@@ -71,17 +72,17 @@ def _error_message(raw, fallback):
         return fallback
 
 
-def request_pairing_code(port=DEFAULT_PORT, repo=None, client=None):
+def request_pairing_code(port=DEFAULT_PORT, layout=None, client=None):
     """POST to the proven loopback endpoint; raises `PairingError` with a readable reason."""
-    client = client or local.LocalClient(repo, port, timeout=5.0)
+    client = client or local.LocalClient(layout or Layout.detect(), port, timeout=5.0)
     try:
         _, body = client.request("POST", "/local/pairing-code")
     except local.SecretMissing:
-        raise PairingError("The Chintu daemon is not running, or was not started from this repository "
-                           "(no var/local.secret).") from None
+        raise PairingError("The Chintu daemon is not running, or was not started from this Chintu folder "
+                           "(no %s)." % client.layout.secret) from None
     except local.Refused:
-        raise PairingError("Port %d refused the local proof: whatever listens there is not this repository's "
-                           "gateway." % port) from None
+        raise PairingError("Port %d refused the local proof: whatever listens there is not the gateway of %s."
+                           % (port, client.layout.home)) from None
     except local.HttpError as error:
         if error.code == 503:
             raise PairingError(_error_message(error.body, "Tailscale is not connected on this computer.")) from None
@@ -108,7 +109,7 @@ def countdown_text(seconds_left):
     return "Expires in %d:%02d" % (minutes, seconds)
 
 
-def show_window(port=DEFAULT_PORT, repo=None, request=request_pairing_code, render=render_qr_png):
+def show_window(port=DEFAULT_PORT, layout=None, request=request_pairing_code, render=render_qr_png):
     """Open the pairing window and run its event loop until closed. Blocks."""
     import tkinter as tk
     from tkinter import font as tkfont
@@ -155,7 +156,7 @@ def show_window(port=DEFAULT_PORT, repo=None, request=request_pairing_code, rend
         status.configure(text="Requesting a fresh one-time code…")
         root.update_idletasks()
         try:
-            code = request(port, repo)
+            code = request(port, layout)
             png = render(code.payload)
         except PairingError as error:
             state["deadline"] = None

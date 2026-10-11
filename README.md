@@ -6,6 +6,10 @@ Talk to local Claude/Codex tasks from an Android phone. Android handles speech r
 
 The [Chintu experience](docs/10-chintu-experience.md) uses a minimal purple-orb home screen, automatic Bluetooth detection with phone fallback, a call-style audio selector, and named computers on Tailscale. Say “Chintu, switch to my Mac” to change the destination after pairing each computer. See [redesign verification](docs/validation/2026-10-10-experience-redesign.md) and [Android installation](apps/android/README.md).
 
+## Install
+
+Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases): the Android APK, a macOS disk image with the menu-bar app and daemon, and Debian packages for Ubuntu 24.04. Install the desktop app on each computer, pair the phone from its QR window, and talk. See [packaging and releases](docs/11-packaging-and-releases.md) for the caveats (ad-hoc signed macOS app, Tailscale installed separately) and for building the packages yourself.
+
 ## Contract first
 
 - [API guide](docs/08-api-contract.md): routes, authentication, retries, errors, and event replay.

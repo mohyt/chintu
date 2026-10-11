@@ -19,6 +19,7 @@ import webbrowser
 from dataclasses import asdict
 
 from . import __version__, autostart, daemon, local, pairing, status, tailscale
+from .layout import Layout
 
 SERVE_REFRESH_EVERY_POLLS = 6  # with a 5 s poll that is every 30 s
 CONFIRM_WINDOW_SECONDS = 60    # a "Confirm ..." menu item disappears again after this long
@@ -75,17 +76,19 @@ class DesktopApp:
         self.pystray = pystray
         self._call_on_main = call_on_main or main_thread_caller()
         self.port = args.port
-        self.repo = args.repo
-        self.supervisor = daemon.GatewaySupervisor(self.repo, self.port, args.gateway_args)
-        self.local = local.LocalClient(self.repo, self.port)
-        self.poller = status.Poller(self.port, self.repo, args.interval, on_state=self._on_state)
+        self.layout = args.layout
+        self.supervisor = daemon.GatewaySupervisor(self.layout, self.port, args.gateway_args)
+        self.local = local.LocalClient(self.layout, self.port)
+        self.poller = status.Poller(self.port, self.layout, args.interval, on_state=self._on_state)
         self.state = self.poller.state
         self.serve = tailscale.ServeStatus(False, False, None, "not checked yet")
+        self.tailscale = tailscale.Installation(False, None, None, "Tailscale: not checked yet", None)
         self.tailscale_binary = tailscale.find_binary()
         self._poll_count = 0
         self._qr_process = None
         self._lock = threading.Lock()
         self.notice = None  # last action result, shown as a menu line
+        self.no_daemon = bool(getattr(args, "no_daemon", False))
         self._pending = None  # (kind, target, asked_at): an action awaiting its "Confirm" click
 
         from .icons import icon_set
@@ -99,8 +102,19 @@ class DesktopApp:
         """Runs on the poller thread: do the slow probe here, touch the icon on the UI thread."""
         self._poll_count += 1
         if self._poll_count % SERVE_REFRESH_EVERY_POLLS == 1:
-            self.serve = tailscale.serve_status(self.port, self.tailscale_binary)
+            self._refresh_tailscale()
         self._call_on_main(self._apply_state, new_state)
+
+    def _refresh_tailscale(self):
+        """Re-discover the CLI each time: installing Tailscale while the tray runs must be noticed."""
+        self.tailscale_binary = tailscale.find_binary()
+        self.tailscale = tailscale.installation(self.tailscale_binary)
+        if self.tailscale.installed:
+            self.serve = tailscale.serve_status(self.port, self.tailscale_binary)
+        else:
+            self.serve = tailscale.ServeStatus(False, False, None, "Tailscale is not installed")
+            if self.notice is None:
+                self.notice = self.tailscale.hint
 
     def _apply_state(self, new_state):
         previous = self.state
@@ -130,7 +144,13 @@ class DesktopApp:
             return
         yield MenuItem(lambda item: status.tasks_line(self.state), None, enabled=False)
         yield MenuItem(lambda item: status.gateway_url_line(self.state), None, enabled=False)
-        yield MenuItem(lambda item: self._serve_line(), None, enabled=False)
+        yield MenuItem(lambda item: self.tailscale.message, None, enabled=False)
+        if not self.tailscale.installed:
+            yield MenuItem("Install Tailscale\u2026", self._install_tailscale)
+        elif not self.tailscale.connected and self.tailscale.hint:
+            yield MenuItem(lambda item: self.tailscale.hint, None, enabled=False)
+        if self.tailscale.installed:
+            yield MenuItem(lambda item: self._serve_line(), None, enabled=False)
         if self.serve.available and not self.serve.enabled:
             if self._pending_is("serve"):
                 yield MenuItem("Confirm: expose the gateway to the whole tailnet", self._enable_serve_confirmed)
@@ -150,6 +170,7 @@ class DesktopApp:
             # Offered only when nothing answers on the port, so a stale pre-poll menu cannot start a second gateway.
             yield MenuItem("Start daemon", self._start_daemon)
         yield MenuItem("Open daemon log", self._open_log, enabled=self.supervisor.log_path.exists())
+        yield MenuItem("Open Chintu folder", self._open_folder)
         if self.notice:
             yield MenuItem(lambda item: self.notice or "", None, enabled=False)
         yield Menu.SEPARATOR
@@ -160,13 +181,13 @@ class DesktopApp:
         if state.daemon_running or self.supervisor.child_running() or not listening:
             return self.supervisor.describe(verified=state.daemon_running)
         if state.fault_kind == "no_secret":
-            return "Gateway: not running, or not started from this repository"
+            return "Gateway: not running, or not started from this Chintu folder"
         return self.supervisor.describe(verified=False)
 
     def _fault_line(self):
         state = self.state
         if state.fault_kind == "no_secret":
-            return "Port %d is in use but %s is missing" % (self.port, local.SECRET_RELATIVE)
+            return "Port %d is in use but %s is missing" % (self.port, self.layout.secret)
         if state.fault_kind == "refused":
             return "It refused the local proof (HTTP 403)"
         return state.error or "It did not answer like the gateway"
@@ -325,15 +346,14 @@ class DesktopApp:
                 except OSError:
                     pass
                 return
-            command = [sys.executable, "-m", "chintu_desktop.app", "--port", str(self.port), "--repo", str(self.repo),
-                       "qr-window"]
+            command = qr_window_command(self.layout, self.port)
             try:
-                self._qr_process = subprocess.Popen(command, cwd=str(self.repo), stdin=subprocess.DEVNULL)
+                self._qr_process = subprocess.Popen(command, cwd=str(self.layout.home), stdin=subprocess.DEVNULL)
             except OSError as error:
                 self._say("Could not open the pairing window: %s" % error)
 
     def _open_pair_page(self, icon, item):
-        # Built here from the port and var/local.secret; a URL from the server is never trusted.
+        # Built here from the port and the layout's local.secret; a URL from the server is never trusted.
         try:
             url = self.local.pair_url()
         except local.SecretMissing as error:
@@ -348,8 +368,26 @@ class DesktopApp:
     def _open(self, url):
         webbrowser.open(url)
 
+    def _install_tailscale(self, icon, item):
+        """Open the download page; the hint stays in the menu until Tailscale answers."""
+        self._say(self.tailscale.hint or tailscale.install_hint())
+        self._open(tailscale.INSTALL_URL)
+
     def _open_log(self, icon, item):
         self._open(self.supervisor.log_path.resolve().as_uri())
+
+    def _open_folder(self, icon, item):
+        """Reveal the Chintu folder (config, database, secret, logs) in Finder / the file manager."""
+        try:
+            self.layout.ensure_home()
+            self._open_path(self.layout.home)
+        except OSError as error:
+            self._say("Could not open %s: %s" % (self.layout.home, error))
+
+    def _open_path(self, path):
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.Popen([opener, str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
 
     def _quit(self, icon, item):
         self.poller.stop()
@@ -369,34 +407,83 @@ class DesktopApp:
         def setup(icon):
             # pystray runs `setup` on a helper thread; showing the item is an AppKit mutation too.
             self._call_on_main(show, icon)
+            self.autostart_daemon()
             self.poller.start()
         self.icon.run(setup=setup)
 
+    def autostart_daemon(self):
+        """An installed Chintu brings its daemon up with the tray; a checkout leaves that to the developer.
+
+        Nothing is started when something already listens on the port: the poller then proves
+        (or refuses) whatever is there, exactly as for a manual start.
+        """
+        if self.layout.kind == "repo" or getattr(self, "no_daemon", False):
+            return False
+        if self.supervisor.listening() or self.supervisor.child_running():
+            return False
+        self._say(self.supervisor.start())
+        return True
+
 
 # --- CLI ----------------------------------------------------------------------------
+
+def is_frozen():
+    """True inside a PyInstaller bundle, where this executable is also the gateway."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def qr_window_command(layout, port, frozen=None, executable=None):
+    """The child process that shows the pairing window, resolving the same layout as the tray."""
+    frozen = is_frozen() if frozen is None else frozen
+    executable = executable or sys.executable
+    command = [executable] if frozen else [executable, "-m", "chintu_desktop.app"]
+    command += ["--port", str(port)]
+    if layout.kind == "repo":
+        command += ["--repo", str(layout.repo)]
+    else:
+        command += ["--home", str(layout.home)]
+    return command + ["qr-window"]
+
+
+def _shared_options(parser, defaults):
+    """`--port/--repo/--home/--gateway-args`, accepted before or after the subcommand.
+
+    The subparsers get `SUPPRESS` defaults so a value given before the subcommand is kept.
+    """
+    parser.add_argument("--port", type=int, default=defaults.get("port", argparse.SUPPRESS),
+                        help="loopback port of the gateway (default %d)" % status.DEFAULT_PORT)
+    parser.add_argument("--repo", type=_path, default=defaults.get("repo", argparse.SUPPRESS),
+                        help="force the repository layout: a checkout holding .venv/bin/chintu-gateway, "
+                             "contracts/ and var/ (default: CHINTU_REPO, or detected from this package)")
+    parser.add_argument("--home", type=_path, default=defaults.get("home", argparse.SUPPRESS),
+                        help="Chintu folder for the database, local secret, gateway.local.json and logs "
+                             "(default: CHINTU_HOME, ~/Library/Application Support/Chintu on macOS, "
+                             "$XDG_DATA_HOME/chintu elsewhere; <repo>/var in the repository layout)")
+    parser.add_argument("--gateway-args", default=defaults.get("gateway_args", argparse.SUPPRESS),
+                        help="arguments for chintu-gateway when starting it, as one shell-quoted string "
+                             "(default: --config <home>/gateway.local.json serve --provider claude-agent, or the "
+                             "scripted fixture when that config file does not exist)")
+
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="chintu-desktop",
                                      description="Menu bar / top panel companion for the local Chintu gateway")
     parser.add_argument("--version", action="version", version="chintu-desktop %s" % __version__)
-    parser.add_argument("--port", type=int, default=status.DEFAULT_PORT,
-                        help="loopback port of the gateway (default %(default)s)")
-    parser.add_argument("--repo", type=_path, default=None,
-                        help="repository root holding .venv/bin/chintu-gateway and var/ "
-                             "(default: CHINTU_REPO or resolved from this package)")
-    parser.add_argument("--gateway-args", default=None,
-                        help="arguments for chintu-gateway when starting it, as one shell-quoted string "
-                             "(default: --config var/gateway.local.json serve --provider claude-agent, or the "
-                             "scripted fixture when that config file does not exist)")
+    _shared_options(parser, dict(port=status.DEFAULT_PORT, repo=None, home=None, gateway_args=None))
     parser.add_argument("--interval", type=float, default=status.POLL_INTERVAL_SECONDS,
                         help="status poll interval in seconds (default %(default)s)")
     parser.add_argument("--mono", action="store_true", help="monochrome icon for light macOS menu bars")
+    parser.add_argument("--no-daemon", action="store_true",
+                        help="do not start the gateway with the tray (installed layouts start it automatically)")
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser("run", help="show the tray icon (default)")
-    commands.add_parser("status", help="print one status snapshot as JSON and exit (no tray)")
-    commands.add_parser("qr-window", help="open the pairing QR window on its own (used by the tray)")
-    commands.add_parser("install-autostart", help="install the login item for this user")
-    commands.add_parser("uninstall-autostart", help="remove the login item for this user")
+    for name, help_text in (("run", "show the tray icon (default)"),
+                            ("status", "print one status snapshot as JSON and exit (no tray)"),
+                            ("qr-window", "open the pairing QR window on its own (used by the tray)"),
+                            ("init", "create the Chintu folder and its default gateway.local.json when missing, "
+                                     "then print the config path (no tray)"),
+                            ("install-autostart", "install the login item for this user"),
+                            ("uninstall-autostart", "remove the login item for this user")):
+        _shared_options(commands.add_parser(name, help=help_text), {})
     return parser
 
 
@@ -406,34 +493,62 @@ def _path(value):
 
 
 def _snapshot(args):
-    payload, error = status.fetch_status(args.port, args.repo)
+    layout = args.layout
+    payload, error = status.fetch_status(args.port, layout)
     clients = None
     if payload is not None:
-        clients, _ = status.fetch_clients(args.port, args.repo)
+        clients, _ = status.fetch_clients(args.port, layout)
     state = status.derive_state(payload, error, port=args.port, clients=clients)
-    serve = tailscale.serve_status(args.port)
-    supervisor = daemon.GatewaySupervisor(args.repo, args.port, args.gateway_args)
+    install = tailscale.installation()
+    serve = tailscale.serve_status(args.port) if install.installed else tailscale.ServeStatus(
+        False, False, None, "Tailscale is not installed")
+    supervisor = daemon.GatewaySupervisor(layout, args.port, args.gateway_args)
     data = asdict(state)
     data["presence"] = state.presence.value
-    data["secret_file"] = str(local.secret_path(args.repo))
+    data["layout"] = layout.describe()
+    data["secret_file"] = str(local.secret_path(layout))
     data["gateway_line"] = supervisor.describe(verified=state.daemon_running)
     data["gateway_command"] = supervisor.command()
+    data["tailscale"] = asdict(install)
     data["tailscale_serve"] = asdict(serve)
     return data
 
 
+def _init(layout):
+    """`chintu-desktop init`: what "Start daemon" prepares, headless, for installers and smoke tests.
+
+    Creates the Chintu folder (0700) and the default `gateway.local.json` (0600) when missing;
+    a repository checkout never gets a generated config. Returns the config path either way.
+    """
+    layout.ensure_home()
+    layout.ensure_config()
+    return layout.config
+
+
+def _run_gateway(argv):
+    """`chintu-desktop gateway ...` is the gateway CLI; the frozen bundle starts its daemon this way."""
+    from chintu_gateway.cli import main as gateway_main
+    sys.argv = ["chintu-gateway"] + list(argv)
+    return gateway_main()
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "gateway":
+        return _run_gateway(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.repo is None:
-        args.repo = daemon.default_repo()
+    args.layout = Layout.detect(repo=args.repo, home=args.home)
     command = args.command or "run"
 
     if command == "status":
         print(json.dumps(_snapshot(args), indent=2, default=str))
         return 0
+    if command == "init":
+        print(_init(args.layout))
+        return 0
     if command == "install-autostart":
-        target, hint = autostart.install(args.repo)
+        target, hint = autostart.install(args.layout)
         print("Installed %s\n%s" % (target, hint))
         return 0
     if command == "uninstall-autostart":
@@ -444,7 +559,7 @@ def main(argv=None):
         if not _display_available():
             print("chintu-desktop: no display available for the pairing window.", file=sys.stderr)
             return 2
-        pairing.show_window(args.port, args.repo)
+        pairing.show_window(args.port, args.layout)
         return 0
 
     if not _display_available():

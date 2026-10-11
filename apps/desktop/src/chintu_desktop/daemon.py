@@ -1,9 +1,10 @@
 """Gateway daemon supervision: port probing, argument selection and the child process.
 
 The desktop app never runs a second gateway next to something that is already
-listening; it only starts `<repo>/.venv/bin/chintu-gateway` when the loopback port
-is free. Whether a listener really is the gateway is decided by a proven
-`/local/status` call (status.py / local.py), not by the TCP probe here.
+listening; it only starts the gateway named by the `Layout` (`<repo>/.venv/bin/chintu-gateway`,
+`<bundle> gateway` or `<venv>/bin/chintu-gateway`) when the loopback port is free.
+Whether a listener really is the gateway is decided by a proven `/local/status`
+call (status.py / local.py), not by the TCP probe here.
 """
 
 import os
@@ -17,39 +18,25 @@ from pathlib import Path
 
 from .status import DEFAULT_PORT
 
-GATEWAY_RELATIVE = Path(".venv") / "bin" / "chintu-gateway"
-LOCAL_CONFIG = Path("var") / "gateway.local.json"
-LOG_RELATIVE = Path("var") / "desktop-gateway.log"
 
-# Preferred: the reviewed operator config with the Claude Agent SDK provider.
-PROVIDER_ARGS = ["--config", str(LOCAL_CONFIG), "serve", "--provider", "claude-agent"]
-# Fallback when no local config exists: the scripted no-I/O fixture against the shared contract.
-SCRIPTED_ARGS = ["--database", "var/chintu.sqlite3", "serve", "--scripted", "--contract", "contracts/openapi.json"]
-
-
-def default_repo():
-    """Repository root: `CHINTU_REPO` wins, else resolve from this package location.
-
-    apps/desktop/src/chintu_desktop/daemon.py -> parents[4] is the repository root.
-    """
-    override = os.environ.get("CHINTU_REPO")
-    if override:
-        return Path(override).expanduser().resolve()
-    return Path(__file__).resolve().parents[4]
-
-
-def select_gateway_args(repo, explicit=None, port=DEFAULT_PORT, config_exists=None):
+def select_gateway_args(layout, explicit=None, port=DEFAULT_PORT, config_exists=None):
     """Choose the gateway CLI arguments (without the executable).
 
+    With the operator config present the real provider is used; otherwise the
+    scripted no-I/O fixture runs against the layout's database and contract.
     `explicit` is the raw `--gateway-args` string; it is split like a shell would and
     used as-is apart from adding `--port` after `serve` when the caller omitted it.
     """
-    repo = Path(repo)
     if explicit:
         args = shlex.split(explicit)
     else:
-        exists = (repo / LOCAL_CONFIG).is_file() if config_exists is None else config_exists
-        args = list(PROVIDER_ARGS if exists else SCRIPTED_ARGS)
+        exists = layout.config.is_file() if config_exists is None else config_exists
+        if exists:
+            args = ["--config", str(layout.config), "serve", "--provider", "claude-agent"]
+        else:
+            args = ["--database", str(layout.database), "serve", "--scripted"]
+            if layout.contract is not None:
+                args += ["--contract", str(layout.contract)]
     if "serve" in args and "--port" not in args:
         args = args + ["--port", str(port)]
     return args
@@ -67,11 +54,11 @@ def port_is_listening(port, host="127.0.0.1", timeout=0.5):
 class GatewaySupervisor:
     """Starts/stops one gateway child process and reports who owns the port."""
 
-    def __init__(self, repo, port=DEFAULT_PORT, gateway_args=None, log_path=None, listening=port_is_listening):
-        self.repo = Path(repo)
+    def __init__(self, layout, port=DEFAULT_PORT, gateway_args=None, log_path=None, listening=port_is_listening):
+        self.layout = layout
         self.port = port
         self.gateway_args = gateway_args
-        self.log_path = Path(log_path) if log_path else self.repo / LOG_RELATIVE
+        self.log_path = Path(log_path) if log_path else layout.gateway_log
         self._listening = listening
         self._process = None
         self._log = None
@@ -80,10 +67,10 @@ class GatewaySupervisor:
 
     @property
     def executable(self):
-        return self.repo / GATEWAY_RELATIVE
+        return self.layout.gateway_executable
 
     def command(self):
-        return [str(self.executable)] + select_gateway_args(self.repo, self.gateway_args, self.port)
+        return list(self.layout.gateway_command) + select_gateway_args(self.layout, self.gateway_args, self.port)
 
     def child_running(self):
         with self._lock:
@@ -135,6 +122,13 @@ class GatewaySupervisor:
             return self._remember("The gateway child process is already running.")
         if not self.executable.is_file():
             return self._remember("Gateway executable not found: %s" % self.executable)
+        try:
+            self.layout.ensure_home()
+            if self.layout.kind != "repo":
+                # A fresh install gets the real provider straight away instead of the scripted fixture.
+                self.layout.ensure_config()
+        except OSError as error:
+            return self._remember("Could not prepare the Chintu folder %s: %s" % (self.layout.home, error))
         command = self.command()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -145,7 +139,7 @@ class GatewaySupervisor:
             self._log.flush()
             try:
                 self._process = subprocess.Popen(
-                    command, cwd=str(self.repo), stdin=subprocess.DEVNULL, stdout=self._log,
+                    command, cwd=str(self.layout.home), stdin=subprocess.DEVNULL, stdout=self._log,
                     stderr=subprocess.STDOUT, start_new_session=True)
             except OSError as error:
                 self._close_log()

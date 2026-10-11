@@ -1,0 +1,43 @@
+# Runtime wheels bundled into the Debian package (/opt/chintu/wheels), CPython 3.12 on Linux.
+# Every version is taken from requirements-dev.lock; the three chintu_* wheels are built from
+# this checkout and added by scripts/package/build-deb.py. Development-only packages
+# (httpx, openapi-spec-validator, requests, ...) and the macOS/Windows-only pystray backends are
+# left out. Resolution must run on Linux (markers are evaluated against the host), so the build
+# script downloads these with `pip download --only-binary=:all: --platform manylinux_...`.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+attrs==26.1.0
+cffi==2.1.1
+claude-agent-sdk==0.2.165
+click==8.5.0
+cryptography==50.0.2
+fastapi==0.141.1
+h11==0.16.0
+httpcore2==2.13.1
+httpx2==2.13.1
+idna==3.20
+jsonschema==4.25.1
+jsonschema-specifications==2025.9.1
+mcp==2.3.0
+mcp-types==2.3.0
+opentelemetry-api==1.45.1
+pillow==12.3.0
+pycparser==3.11
+pydantic==2.12.5
+pydantic-core==2.41.5
+pyjwt==2.15.1
+pystray==0.19.5
+python-multipart==0.0.32
+python-xlib==0.33
+referencing==0.36.2
+rpds-py==2026.9.1
+segno==1.6.6
+six==1.17.0
+sniffio==1.3.1
+sse-starlette==3.5.0
+starlette==1.3.1
+truststore==0.10.4
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uvicorn==0.38.0

@@ -1,6 +1,7 @@
 """The gateway's local operator API and the proof it demands.
 
-The gateway writes a per-start secret to `<repo>/var/local.secret` (mode 0600).
+The gateway writes a per-start secret to `local.secret` beside its database (mode
+0600); the `Layout` says where that is (`<repo>/var/` or the per-user Chintu folder).
 Every `/local/*` request must carry it as `X-Chintu-Local`, send a `Host` header
 of exactly `127.0.0.1:<port>` and no `Origin`; anything else is a 403. The secret
 changes whenever the daemon restarts, so it is read from disk for every request
@@ -20,10 +21,8 @@ import http.client
 import json
 import urllib.parse
 from dataclasses import dataclass
-from pathlib import Path
 
 DEFAULT_PORT = 8765
-SECRET_RELATIVE = Path("var") / "local.secret"
 HEADER = "X-Chintu-Local"
 DEFAULT_TIMEOUT = 2.0
 
@@ -35,7 +34,7 @@ class LocalError(Exception):
 
 
 class SecretMissing(LocalError):
-    """`var/local.secret` is absent or empty: the daemon is not running, or not from this repository."""
+    """`local.secret` is absent or empty: the daemon is not running, or not from this Chintu folder."""
 
     kind = "no_secret"
 
@@ -47,7 +46,7 @@ class Unreachable(LocalError):
 
 
 class Refused(LocalError):
-    """HTTP 403: the listener did not accept our proof, so it is not this repository's gateway."""
+    """HTTP 403: the listener did not accept our proof, so it is not this Chintu folder's gateway."""
 
     kind = "refused"
 
@@ -69,20 +68,20 @@ class NotChintu(LocalError):
     kind = "not_chintu"
 
 
-def secret_path(repo):
-    return Path(repo) / SECRET_RELATIVE
+def secret_path(layout):
+    return layout.secret
 
 
-def read_secret(repo):
+def read_secret(layout):
     """The current secret, read fresh from disk. Raises `SecretMissing`."""
-    path = secret_path(repo)
+    path = secret_path(layout)
     try:
         value = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         value = ""
     if not value or any(ch.isspace() for ch in value):
         raise SecretMissing("no local secret at %s: the Chintu daemon is not running, "
-                            "or was not started from this repository" % path)
+                            "or was not started from this Chintu folder (%s)" % (path, path.parent))
     return value
 
 
@@ -110,14 +109,14 @@ def http_transport(port, method, path, headers, body, timeout):
 class LocalClient:
     """Talks to `/local/*` on behalf of the tray; one instance per app, stateless apart from its settings."""
 
-    def __init__(self, repo, port=DEFAULT_PORT, timeout=DEFAULT_TIMEOUT, transport=http_transport):
-        self.repo = Path(repo)
+    def __init__(self, layout, port=DEFAULT_PORT, timeout=DEFAULT_TIMEOUT, transport=http_transport):
+        self.layout = layout
         self.port = port
         self.timeout = timeout
         self.transport = transport
 
     def secret(self):
-        return read_secret(self.repo)
+        return read_secret(self.layout)
 
     def pair_url(self):
         return pair_url(self.port, self.secret())
@@ -132,8 +131,8 @@ class LocalClient:
         except (OSError, http.client.HTTPException, TimeoutError) as error:
             raise Unreachable("gateway unreachable: %s" % (getattr(error, "strerror", None) or error)) from None
         if code == 403:
-            raise Refused("port %d refused the local proof (HTTP 403): it is not this repository's gateway"
-                          % self.port)
+            raise Refused("port %d refused the local proof (HTTP 403): it is not the gateway of %s"
+                          % (self.port, self.layout.home))
         if not 200 <= code < 300:
             raise HttpError(code, payload)
         return code, payload

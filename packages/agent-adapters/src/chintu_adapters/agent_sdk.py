@@ -2,8 +2,11 @@
 
 The SDK is imported lazily so the package works without it. No API key is ever
 passed; the SDK launches the owner's ``claude`` executable and uses its stored
-login. Profiles map to SDK permission modes and tool lists; there is no
-interactive approval path, so anything that would prompt is denied instead.
+login. The default executable name ``claude`` is looked up on PATH and, failing
+that, the Claude Code CLI the ``claude-agent-sdk`` package ships
+(``claude_agent_sdk/_bundled/claude``), so a packaged Chintu works without a
+separately installed CLI. Profiles map to SDK permission modes and tool lists;
+there is no interactive approval path, so anything that would prompt is denied instead.
 
 ``inspect`` and ``develop`` register no bare ``allowed_tools`` entries: the SDK
 auto-approves such entries before any callback, so confinement is enforced by the
@@ -19,6 +22,7 @@ import importlib
 import logging
 from pathlib import Path
 import shutil
+import sys
 from typing import AsyncIterator
 import uuid
 
@@ -28,6 +32,7 @@ from .types import AdapterCapabilities, AdapterEvent, TaskCommand, bounded_text,
 
 PROVIDER = "claude-agent"
 DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_EXECUTABLE = "claude"
 READ_ONLY_TOOLS = PROFILE_TOOLS["inspect"]
 DEVELOP_TOOLS = PROFILE_TOOLS["develop"]
 CLAUDE_CODE_PRESET = {"type": "preset", "preset": "claude_code"}
@@ -137,7 +142,7 @@ DEFAULT_PERSONA = (
 class ClaudeAgentAdapter:
     provider = PROVIDER
 
-    def __init__(self, executable: str = "claude", *, model: str = DEFAULT_MODEL,
+    def __init__(self, executable: str = DEFAULT_EXECUTABLE, *, model: str = DEFAULT_MODEL,
                  profiles: tuple[str, ...] = DEFAULT_PROFILES, load_user_settings: bool = True,
                  max_turns: int | None = None, timeout_seconds: float = 1800, stop_seconds: float = 10,
                  max_progress_events: int = 150, max_output_events: int = 60, sdk=None,
@@ -166,11 +171,28 @@ class ClaudeAgentAdapter:
             return self._injected_sdk
         return importlib.import_module("claude_agent_sdk")
 
+    def bundled_executable(self) -> str | None:
+        """The Claude Code CLI shipped inside the installed SDK package, if there is one."""
+        try:
+            sdk = self._sdk()
+        except ImportError:
+            return None
+        location = getattr(sdk, "__file__", None)
+        if not location:
+            return None
+        path = Path(location).parent / "_bundled" / ("claude.exe" if sys.platform == "win32" else "claude")
+        return str(path) if path.is_file() else None
+
     def resolved_executable(self) -> str | None:
+        """An explicit path must exist; a bare name is looked up on PATH. The default name
+        ``claude`` additionally falls back to the SDK's bundled CLI."""
         path = Path(self.executable).expanduser()
         if path.is_absolute() or "/" in self.executable:
             return str(path) if path.is_file() else None
-        return shutil.which(self.executable)
+        found = shutil.which(self.executable)
+        if found is None and self.executable == DEFAULT_EXECUTABLE:
+            found = self.bundled_executable()
+        return found
 
     def _unavailable_reason(self) -> str | None:
         unknown = [p for p in self.profiles if p not in PROFILE_POLICIES]
@@ -181,7 +203,9 @@ class ClaudeAgentAdapter:
         except ImportError:
             return "Disabled: the claude-agent-sdk Python package is not installed (pip install claude-agent-sdk)."
         if self.resolved_executable() is None:
-            return f"Disabled: the Claude Code executable '{self.executable}' was not found; install and log in with the claude CLI."
+            return (f"Disabled: the Claude Code executable '{self.executable}' was not found on PATH"
+                    + (" and the claude-agent-sdk package ships no bundled CLI" if self.executable == DEFAULT_EXECUTABLE else "")
+                    + "; install and log in with the claude CLI.")
         return None
 
     def capabilities(self) -> AdapterCapabilities:
