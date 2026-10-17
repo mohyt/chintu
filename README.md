@@ -8,7 +8,7 @@ The [Chintu experience](docs/10-chintu-experience.md) uses a minimal purple-orb 
 
 ## Install
 
-Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases): the Android APK, a macOS disk image with the menu-bar app and daemon, and Debian packages for Ubuntu 24.04. Install the desktop app on each computer, pair the phone from its QR window, and talk. On Ubuntu/Debian (amd64, arm64) or an Apple silicon Mac, one command picks the right package, verifies its SHA-256 and starts the tray:
+Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases): the Android APK, a macOS disk image with the menu-bar app and daemon, and Debian packages for Ubuntu 24.04 and 26.04 and Debian 13. Install the desktop app on each computer, pair the phone from its QR window, and talk. On Ubuntu/Debian (amd64, arm64) or an Apple silicon Mac, one command picks the right package, verifies its SHA-256 and starts the tray:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mohyt/chintu/main/install.sh | bash

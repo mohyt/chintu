@@ -173,7 +173,7 @@ journalctl --user -u chintu-gateway -f
 across reboots. The unit assumes the repository at `~/dev/continuum/chintu`; edit
 `WorkingDirectory` and `ExecStart` otherwise.
 
-## Debian package (Ubuntu 24.04, amd64 and arm64)
+## Debian package (Ubuntu 24.04 and 26.04, Debian 13; amd64 and arm64)
 
 `scripts/package/build-deb.py` produces `dist/chintu-desktop_<version>_amd64.deb` and
 `dist/chintu-desktop_<version>_arm64.deb` (the release workflow runs it on an
@@ -186,7 +186,7 @@ to the versions in `requirements-dev.lock`.
 Install, then check the layout the commands picked up:
 
 ```sh
-sudo apt install ./chintu-desktop_0.4.0_amd64.deb   # or _arm64.deb
+sudo apt install ./chintu-desktop_0.4.1_amd64.deb   # or _arm64.deb
 chintu-desktop --version
 chintu-desktop status | head -40                    # layout.kind is "installed"
 ```

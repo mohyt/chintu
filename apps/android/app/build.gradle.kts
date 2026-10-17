@@ -48,7 +48,7 @@ android {
         applicationId = "ai.chintu"
         minSdk = 31
         targetSdk = 35
-        versionCode = 4
+        versionCode = 5
         versionName = chintuVersion
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
