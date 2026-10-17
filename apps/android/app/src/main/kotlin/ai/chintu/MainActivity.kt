@@ -1516,6 +1516,9 @@ class MainActivity : Activity() {
         super.onStart(); foreground = true
         TaskWatchService.stop(this)
         WakeWordService.onWake = { onWakeWord() }
+        // The notification's Turn off changes the setting while the app is away; show the current value.
+        val wakeEnabled = preferences.getBoolean(WakeWordService.PREF_ENABLED, false)
+        if (::wakeWord.isInitialized && wakeWord.isChecked != wakeEnabled) wakeWord.isChecked = wakeEnabled
         if (preferences.getBoolean(WakeWordService.PREF_ENABLED, false) && !WakeWordService.running &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) WakeWordService.start(this)
         if (wakeLaunch) { wakeLaunch = false; greeted = true; handler.postDelayed({ onWakeWord() }, 700) }

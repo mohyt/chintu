@@ -43,7 +43,7 @@ Choose workspace, provider, and permission profile separately for each computer.
 
 Tap the microphone, or explicitly enable **Hands-free while the app is open**. Hands-free uses successive bounded Android recognition turns, pausing for replies, connection operations, editing, and review. It is a foreground convenience, not a background wake-word engine. The app does not capture while speaking. A reply arriving during capture is held until capture ends rather than discarded or spoken over the user.
 
-Final ordinary speech becomes an editable draft. **Send finished voice instructions automatically** is a separate opt-in and resets when the app leaves the foreground. Partial results never submit. Typing stops capture so recognition cannot overwrite an edit. Both automatic sending and hands-free stop when the app closes, locks, or backgrounds; results remain on the computer. Dedicated screen-off wake detection and full duplex remain M8.
+Final ordinary speech becomes an editable draft. **Send finished voice instructions automatically** is a separate opt-in and resets when the app leaves the foreground. Partial results never submit. Typing stops capture so recognition cannot overwrite an edit. Both automatic sending and hands-free stop when the app closes, locks, or backgrounds; results remain on the computer. A local wake word ("Chintu", on-device Vosk) is available as an opt-in in Settings and works with the screen off; full duplex remains M8. See [the wake-word validation](validation/2026-10-17-wake-word.md).
 
 ## Device acceptance
 
