@@ -32,6 +32,14 @@ class SpeechController(private val context: Context, private val status: (String
     /** Note mode taps the live hypothesis so text can be flushed on a fixed cadence, not only at end of speech. */
     var onPartial: ((String) -> Unit)? = null
     var onSessionStart: (() -> Unit)? = null
+    /**
+     * Android 13+: instructions are streamed from Chintu's own microphone reader (MicStream) into a segmented
+     * session, so Chintu decides when the speaker has finished (2 s of quiet) instead of the recogniser, which
+     * ends at a ~1 s pause and ignores the silence, minimum-length and plain segmented-session extras.
+     */
+    var streamInstructions = android.os.Build.VERSION.SDK_INT >= 33
+    private var mic: MicStream? = null
+    private val segments = StringBuilder()
     private var generation = 0
     private var utterance = 0
     private var closed = false
@@ -61,6 +69,7 @@ class SpeechController(private val context: Context, private val status: (String
         stopSpeaking()
         val session = ++generation
         isListening = false
+        stopMic(); segments.setLength(0)
         try {
             val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
             // Reuse the bound recogniser between sessions: destroying and recreating it on every phrase makes
@@ -83,12 +92,16 @@ class SpeechController(private val context: Context, private val status: (String
                     onSessionStart?.invoke()
                 }
                 override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) { if (session == generation) meter(((rmsdB + 2f) / 12f).coerceIn(0f, 1f)) }
+                override fun onRmsChanged(rmsdB: Float) { if (session == generation && mic == null) meter(((rmsdB + 2f) / 12f).coerceIn(0f, 1f)) }
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { if (session == generation) { phaseChanged(VoicePhase.THINKING); status("One moment…") } }
+                override fun onEndOfSpeech() { if (session == generation && mic == null) { phaseChanged(VoicePhase.THINKING); status("One moment…") } }
                 override fun onError(error: Int) {
                     if (session != generation) return
                     generation++; isListening = false; phaseChanged(VoicePhase.IDLE); lastError = error
+                    val streamed = mic != null
+                    stopMic()
+                    val partial = segments.toString().trim()
+                    if (streamed && partial.isNotEmpty()) { finalText(partial); return }  // keep what was already recognised
                     if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT ||
                         error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED) {
                         // The bound service is wedged; drop it so the next attempt binds a fresh one after a pause.
@@ -120,9 +133,25 @@ class SpeechController(private val context: Context, private val status: (String
                 override fun onPartialResults(partialResults: Bundle?) {
                     if (session != generation) return
                     val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                    if (!partial.isNullOrBlank()) { status("Hearing: $partial"); onPartial?.invoke(partial) }
+                    if (!partial.isNullOrBlank()) {
+                        mic?.heardWords()
+                        val sofar = (segments.toString() + " " + partial).trim()
+                        status("Hearing: $sofar"); onPartial?.invoke(partial)
+                    }
                 }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
+                override fun onSegmentResults(segmentResults: Bundle) {
+                    if (session != generation) return
+                    val text = segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    if (!text.isNullOrBlank()) { segments.append(' ').append(text.trim()); mic?.heardWords() }
+                }
+                override fun onEndOfSegmentedSession() {
+                    if (session != generation) return
+                    generation++; isListening = false; phaseChanged(VoicePhase.IDLE); lastError = 0
+                    stopMic()
+                    val text = segments.toString().trim()
+                    if (text.isEmpty()) { status("I didn't catch that."); recognitionError(true) } else finalText(text)
+                }
             })
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -133,14 +162,44 @@ class SpeechController(private val context: Context, private val status: (String
                 .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 12000L)
                 .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
                 .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 120000L)
+            val stream = if (!dictation && streamInstructions) MicStream(source = micSource(),
+                level = { value -> handler.post { if (session == generation) meter(value) } },
+                ended = { reason -> handler.post {
+                    if (session == generation && reason != MicStream.Reason.STOPPED) { phaseChanged(VoicePhase.THINKING); status("One moment…") }
+                } }) else null
+            if (stream != null) intent
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, stream.readSide)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, MicStream.SAMPLE_RATE)
+                .putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
             isListening = true; phaseChanged(VoicePhase.LISTENING); status("Opening the microphone…")
             service.startListening(intent)
+            if (stream != null) {
+                mic = stream
+                if (!stream.start()) { mic = null; streamInstructions = false; service.cancel(); listen(onlineOptIn, language, dictation); return }
+            }
         } catch (_: Exception) {
             generation++; isListening = false; phaseChanged(VoicePhase.IDLE)
             status("Couldn't start speech recognition. You can type instead."); recognitionError(false)
         }
     }
+    /** Headset or phone microphone: a Bluetooth communication device is reached through VOICE_COMMUNICATION. */
+    private fun micSource(): Int {
+        val manager = context.getSystemService(android.media.AudioManager::class.java)
+        val type = manager?.communicationDevice?.type
+        val headset = type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO || type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
+        return if (headset) android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION else android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION
+    }
+    private fun stopMic() {
+        val current = mic ?: return
+        mic = null
+        current.stop()
+        handler.postDelayed({ current.releaseReadSide() }, 1000)
+    }
     fun finish() {
+        // Streaming: ending the audio ends the session and keeps every segment heard so far.
+        mic?.let { it.stop(); return }
         try { recognizer?.stopListening() }
         catch (_: Exception) { pause(); status("Speech recognition stopped. Try again."); recognitionError(false) }
     }
@@ -164,7 +223,7 @@ class SpeechController(private val context: Context, private val status: (String
         if (!isListening) phaseChanged(VoicePhase.IDLE)
     }
     fun cancelRecognition() {
-        generation++; isListening = false
+        generation++; isListening = false; stopMic()
         try { recognizer?.cancel() } catch (_: Exception) { }
         if (!isSpeaking) phaseChanged(VoicePhase.IDLE)
     }
