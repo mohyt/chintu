@@ -17,6 +17,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Keeps watching one accepted task after the app leaves the foreground, then notifies when it finishes.
  * Polls the task snapshot only (never the event cursor, which belongs to the activity), so the two
  * readers cannot race. Stops itself on a terminal state, after a bounded wait, or when the app returns.
+ *
+ * Android kills the app when a service started with startForegroundService() is stopped, or stops
+ * itself, before it calls startForeground(). Every command therefore reaches startForeground() first,
+ * and stop() sends an ACTION_STOP command instead of stopService() while a start may still be queued,
+ * so the start command is handled (and promoted) before the stop.
  */
 class TaskWatchService : Service() {
     companion object {
@@ -25,13 +30,19 @@ class TaskWatchService : Service() {
         private const val NOTIFICATION_ID = 41
         private const val MAX_WAIT_MS = 45 * 60 * 1000L
         const val PREF_ANNOUNCE = "announce"
+        private const val ACTION_STOP = "ai.chintu.action.STOP_WATCH"
+        @Volatile private var running = false  // a start was requested and the service has not finished yet
 
         fun start(context: Context, gateway: String, taskId: String, computer: String, instruction: String) {
             val intent = Intent(context, TaskWatchService::class.java)
                 .putExtra("gateway", gateway).putExtra("task", taskId).putExtra("computer", computer).putExtra("instruction", instruction)
+            running = true
             context.startForegroundService(intent)
         }
-        fun stop(context: Context) { context.stopService(Intent(context, TaskWatchService::class.java)) }
+        /** Called from the activity's onStart, so the app is in the foreground and may start the service to stop it. */
+        fun stop(context: Context) {
+            if (running) context.startService(Intent(context, TaskWatchService::class.java).setAction(ACTION_STOP))
+        }
         fun channels(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(NotificationChannel(CHANNEL_WORKING, "Working on a task", NotificationManager.IMPORTANCE_LOW)
@@ -50,9 +61,11 @@ class TaskWatchService : Service() {
         val gateway = intent?.getStringExtra("gateway"); val taskId = intent?.getStringExtra("task")
         val computer = intent?.getStringExtra("computer") ?: "your computer"
         val instruction = intent?.getStringExtra("instruction").orEmpty()
-        if (gateway.isNullOrBlank() || taskId.isNullOrBlank()) { stopSelf(); return START_NOT_STICKY }
         channels(this)
         startForeground(NOTIFICATION_ID, working(computer, instruction, "Working on it…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        if (intent?.action == ACTION_STOP || gateway.isNullOrBlank() || taskId.isNullOrBlank()) {
+            stopped.set(true); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY
+        }
         executor.execute { watch(gateway, taskId, computer, instruction) }
         return START_NOT_STICKY
     }
@@ -113,5 +126,5 @@ class TaskWatchService : Service() {
         try { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification) } catch (_: SecurityException) { }
     }
 
-    override fun onDestroy() { stopped.set(true); executor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { stopped.set(true); running = false; executor.shutdownNow(); super.onDestroy() }
 }
