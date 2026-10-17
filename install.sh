@@ -175,6 +175,13 @@ check_prerequisites() {
     else
       warn "Tailscale is not installed: get it from https://tailscale.com/download/mac and sign in"
     fi
+  elif [ "$OS" = Linux ] && [ "$(id -u)" -ne 0 ]; then
+    # Without operator rights the tray's "Enable Tailscale Serve" fails with "access denied".
+    local prefs
+    prefs="$(tailscale debug prefs 2> /dev/null || true)"
+    if [ -n "$prefs" ] && ! printf '%s' "$prefs" | grep -Eq "\"OperatorUser\": *\"$(id -un)\""; then
+      warn "let Chintu turn on Tailscale Serve without sudo: sudo tailscale set --operator=$(id -un)"
+    fi
   fi
   [ -d "$HOME/.claude" ] || warn "no Claude Code sign-in found; install Claude Code and run 'claude' once to log in"
   return 0

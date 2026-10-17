@@ -186,7 +186,7 @@ to the versions in `requirements-dev.lock`.
 Install, then check the layout the commands picked up:
 
 ```sh
-sudo apt install ./chintu-desktop_0.4.1_amd64.deb   # or _arm64.deb
+sudo apt install ./chintu-desktop_0.4.2_amd64.deb   # or _arm64.deb
 chintu-desktop --version
 chintu-desktop status | head -40                    # layout.kind is "installed"
 ```

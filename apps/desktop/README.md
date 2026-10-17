@@ -64,7 +64,17 @@ use and holds:
 | `chintu.sqlite3` | the gateway (tasks, paired phones) |
 | `local.secret` | the gateway, fresh on every start (mode 0600) |
 | `desktop-gateway.log` | this app, the output of a gateway it started |
+| `desktop.json` | this app: the gateway port it settled on (`{"port": 8766}`) when 8765 was taken by another program; delete it to go back to 8765 |
 | `desktop.log`, `desktop.err.log` | launchd, when the login item is installed |
+
+Port choice: an explicit `--port` wins, then the port saved in `desktop.json`, then 8765. When
+the tray starts (bundle and installed layouts, no `--port`, no `--no-daemon`) and the port answers
+but is not this folder's gateway, it moves to the first free port in 8766-8799, saves it and says
+so in the menu. Tailscale Serve, pairing and `chintu-desktop status` then use that port too.
+
+Notifications on Linux go straight to the freedesktop notification service with the app name
+"Chintu", the `chintu` theme icon and the `ai.chintu` desktop entry, so GNOME shows who sent them;
+pystray's own notifier is used on macOS.
 
 `chintu-desktop gateway …` runs the gateway CLI in-process with the remaining
 arguments; the bundle starts its daemon that way because it ships no separate
@@ -171,7 +181,7 @@ or python.org's, something with a shared `libpython`) and the Xcode command-line
 No sudo, no Docker.
 
 ```sh
-scripts/package/build-dmg.sh                       # build/macos/ scratch, dist/Chintu-0.4.1-arm64.dmg
+scripts/package/build-dmg.sh                       # build/macos/ scratch, dist/Chintu-0.4.2-arm64.dmg
 scripts/package/smoke-macos.sh build/macos/dist/Chintu.app   # re-run the checks on a built app
 ```
 

@@ -141,6 +141,18 @@ def serve_status(port, binary=None, runner=subprocess.run):
     return ServeStatus(True, enabled, url, None)
 
 
+def operator_hint(user=None):
+    """The one command that lets a non-root user run `tailscale serve` on Linux."""
+    user = user or os.environ.get("USER") or "$USER"
+    return ("Tailscale Serve needs permission on this computer. Run once in a terminal: "
+            "sudo tailscale set --operator=%s, then choose Enable Tailscale Serve again." % user)
+
+
+def _needs_operator(output):
+    text = output.lower()
+    return "access denied" in text or "--operator" in text or "permission denied" in text
+
+
 def enable_serve(port, binary=None, runner=subprocess.run):
     """Run `tailscale serve --bg <port>`; returns `(ok, message)`."""
     binary = binary or find_binary()
@@ -152,6 +164,8 @@ def enable_serve(port, binary=None, runner=subprocess.run):
         return False, "tailscale serve failed: %s" % error
     output = ((result.stdout or "") + (result.stderr or "")).strip()
     if result.returncode != 0:
+        if _needs_operator(output):
+            return False, operator_hint()
         first = output.splitlines()[0] if output else "exit code %d" % result.returncode
         return False, "tailscale serve failed: %s" % first
     return True, output or "Tailscale Serve enabled for port %d" % port

@@ -6,7 +6,8 @@ import time
 import unittest
 from pathlib import Path
 
-from chintu_desktop.daemon import GatewaySupervisor, port_is_listening, select_gateway_args
+from chintu_desktop.daemon import (FALLBACK_PORTS, GatewaySupervisor, port_is_listening, relocate_if_taken,
+                                   resolve_port, save_port, saved_port, select_gateway_args)
 from chintu_desktop.layout import Layout
 from fake_gateway import repo_layout
 
@@ -159,6 +160,60 @@ class SupervisorTests(unittest.TestCase):
             while time.time() < deadline and supervisor.child_running():
                 time.sleep(0.05)
             self.assertEqual(supervisor.describe(), "Gateway: exited with code 3 (see log)")
+
+
+class PortChoiceTests(unittest.TestCase):
+    def test_saved_port_round_trip_and_precedence(self):
+        with tempfile.TemporaryDirectory() as root:
+            layout = _installed_layout(root)
+            self.assertIsNone(saved_port(layout))
+            self.assertEqual(resolve_port(layout), 8765)
+            save_port(layout, 8766)
+            self.assertEqual(saved_port(layout), 8766)
+            self.assertEqual(resolve_port(layout), 8766)
+            self.assertEqual(resolve_port(layout, 9000), 9000)
+            self.assertEqual(layout.settings.stat().st_mode & 0o777, 0o600)
+
+    def test_unreadable_settings_are_ignored(self):
+        with tempfile.TemporaryDirectory() as root:
+            layout = _installed_layout(root)
+            layout.ensure_home()
+            for text in ("not json", "[]", '{"port": "8766"}', '{"port": 70000}'):
+                layout.settings.write_text(text)
+                self.assertIsNone(saved_port(layout), text)
+            save_port(layout, 8770)  # rewrites a broken file instead of failing
+            self.assertEqual(saved_port(layout), 8770)
+
+    def test_repo_layout_never_saves(self):
+        with tempfile.TemporaryDirectory() as root:
+            layout = repo_layout(root)
+            save_port(layout, 8766)
+            self.assertFalse(layout.settings.exists())
+
+    def test_free_or_own_port_is_kept(self):
+        with tempfile.TemporaryDirectory() as root:
+            layout = _installed_layout(root)
+            self.assertEqual(relocate_if_taken(layout, 8765, lambda p: self.fail("not probed"),
+                                               listening=lambda p: False), (8765, None))
+            self.assertEqual(relocate_if_taken(layout, 8765, lambda p: True, listening=lambda p: True), (8765, None))
+            self.assertFalse(layout.settings.exists())
+
+    def test_foreign_listener_moves_to_next_free_port_and_saves_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            layout = _installed_layout(root)
+            busy = {8765, 8766}
+            port, notice = relocate_if_taken(layout, 8765, lambda p: False, listening=lambda p: p in busy)
+            self.assertEqual(port, 8767)
+            self.assertIn("8765 is used by another program", notice)
+            self.assertEqual(saved_port(layout), 8767)
+
+    def test_every_fallback_busy_keeps_port_and_explains(self):
+        with tempfile.TemporaryDirectory() as root:
+            layout = _installed_layout(root)
+            port, notice = relocate_if_taken(layout, 8765, lambda p: False, listening=lambda p: True)
+            self.assertEqual(port, 8765)
+            self.assertIn("%d-%d are busy" % (FALLBACK_PORTS[0], FALLBACK_PORTS[-1]), notice)
+            self.assertFalse(layout.settings.exists())
 
 
 if __name__ == "__main__":

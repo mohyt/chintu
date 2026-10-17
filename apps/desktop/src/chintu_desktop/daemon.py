@@ -5,8 +5,14 @@ listening; it only starts the gateway named by the `Layout` (`<repo>/.venv/bin/c
 `<bundle> gateway` or `<venv>/bin/chintu-gateway`) when the loopback port is free.
 Whether a listener really is the gateway is decided by a proven `/local/status`
 call (status.py / local.py), not by the TCP probe here.
+
+The port is chosen once per tray start (`resolve_port`, `relocate_if_taken`): an explicit
+`--port` wins, then the port saved in `<home>/desktop.json`, then 8765. When another program
+already holds the port, the tray moves to the next free one and saves it, so the login item,
+the app menu launcher and `chintu-desktop status` all agree without extra arguments.
 """
 
+import json
 import os
 import shlex
 import signal
@@ -40,6 +46,61 @@ def select_gateway_args(layout, explicit=None, port=DEFAULT_PORT, config_exists=
     if "serve" in args and "--port" not in args:
         args = args + ["--port", str(port)]
     return args
+
+
+FALLBACK_PORTS = range(DEFAULT_PORT + 1, DEFAULT_PORT + 35)  # 8766-8799
+
+
+def saved_port(layout):
+    """The port saved in the layout's desktop.json, or None when absent or unreadable."""
+    try:
+        port = json.loads(layout.settings.read_text()).get("port")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return port if isinstance(port, int) and 0 < port < 65536 else None
+
+
+def save_port(layout, port):
+    """Persist the chosen port; a repository checkout keeps no tray settings."""
+    if layout.kind == "repo":
+        return
+    layout.ensure_home()
+    try:
+        data = json.loads(layout.settings.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data["port"] = port
+    temporary = layout.settings.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(json.dumps(data, indent=2) + "\n")
+    os.replace(temporary, layout.settings)
+
+
+def resolve_port(layout, explicit=None):
+    """An explicit --port, else the saved port, else the default."""
+    return explicit or saved_port(layout) or DEFAULT_PORT
+
+
+def relocate_if_taken(layout, port, is_ours, listening=None):
+    """Return `(port, notice)`: a free port when another program holds `port`.
+
+    `is_ours(port)` must prove the listener is this layout's gateway (a `/local/status` call
+    with its secret). Nothing changes when the port is free or already ours; the new port is
+    saved so later starts use it directly.
+    """
+    listening = listening or port_is_listening
+    if not listening(port) or is_ours(port):
+        return port, None
+    for candidate in FALLBACK_PORTS:
+        if candidate != port and not listening(candidate):
+            save_port(layout, candidate)
+            return candidate, ("Port %d is used by another program, so Chintu now uses port %d "
+                               "(saved in %s)." % (port, candidate, layout.settings))
+    return port, ("Port %d is used by another program and ports %d-%d are busy too; quit the other "
+                  "program or start Chintu with --port." % (port, FALLBACK_PORTS[0], FALLBACK_PORTS[-1]))
 
 
 def port_is_listening(port, host="127.0.0.1", timeout=0.5):

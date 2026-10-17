@@ -18,7 +18,7 @@ import time
 import webbrowser
 from dataclasses import asdict
 
-from . import __version__, autostart, daemon, local, pairing, status, tailscale
+from . import __version__, autostart, daemon, local, notify, pairing, status, tailscale
 from .layout import Layout
 
 SERVE_REFRESH_EVERY_POLLS = 6  # with a 5 s poll that is every 30 s
@@ -87,7 +87,7 @@ class DesktopApp:
         self._poll_count = 0
         self._qr_process = None
         self._lock = threading.Lock()
-        self.notice = None  # last action result, shown as a menu line
+        self.notice = getattr(args, "port_notice", None)  # last action result, shown as a menu line
         self.no_daemon = bool(getattr(args, "no_daemon", False))
         self._pending = None  # (kind, target, asked_at): an action awaiting its "Confirm" click
 
@@ -95,6 +95,7 @@ class DesktopApp:
         self.images = icon_set(size=64, mono=args.mono)
         self.icon = pystray.Icon("chintu-desktop", self.images[status.Presence.DOWN], status.tooltip(self.state),
                                  menu=pystray.Menu(self._menu_items))
+        self._notify = None  # created lazily: the Linux notifier needs the session bus
 
     # --- polling -------------------------------------------------------------------
 
@@ -264,11 +265,12 @@ class DesktopApp:
     def _say(self, message):
         self.notice = message
         self._call_on_main(self.icon.update_menu)
-        if getattr(self.icon, "HAS_NOTIFICATION", False):
-            try:
-                self.icon.notify(message, "Chintu Desktop")
-            except Exception:  # noqa: BLE001 - notifications are best effort
-                pass
+        try:
+            if self._notify is None:
+                self._notify = notify.notifier_for(self.icon) or (lambda message: None)
+            self._notify(message)
+        except Exception:  # noqa: BLE001 - notifications are best effort
+            pass
 
     def _in_background(self, work):
         threading.Thread(target=work, name="chintu-desktop-action", daemon=True).start()
@@ -451,7 +453,9 @@ def _shared_options(parser, defaults):
     The subparsers get `SUPPRESS` defaults so a value given before the subcommand is kept.
     """
     parser.add_argument("--port", type=int, default=defaults.get("port", argparse.SUPPRESS),
-                        help="loopback port of the gateway (default %d)" % status.DEFAULT_PORT)
+                        help="loopback port of the gateway (default: the port saved in <home>/desktop.json, "
+                             "else %d; the tray moves to a free port and saves it when another program "
+                             "holds that one)" % status.DEFAULT_PORT)
     parser.add_argument("--repo", type=_path, default=defaults.get("repo", argparse.SUPPRESS),
                         help="force the repository layout: a checkout holding .venv/bin/chintu-gateway, "
                              "contracts/ and var/ (default: CHINTU_REPO, or detected from this package)")
@@ -469,7 +473,7 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="chintu-desktop",
                                      description="Menu bar / top panel companion for the local Chintu gateway")
     parser.add_argument("--version", action="version", version="chintu-desktop %s" % __version__)
-    _shared_options(parser, dict(port=status.DEFAULT_PORT, repo=None, home=None, gateway_args=None))
+    _shared_options(parser, dict(port=None, repo=None, home=None, gateway_args=None))
     parser.add_argument("--interval", type=float, default=status.POLL_INTERVAL_SECONDS,
                         help="status poll interval in seconds (default %(default)s)")
     parser.add_argument("--mono", action="store_true", help="monochrome icon for light macOS menu bars")
@@ -514,6 +518,22 @@ def _snapshot(args):
     return data
 
 
+def _is_our_gateway(layout, port, attempts=3, delay=1.0):
+    """True when the listener on `port` answers `/local/status` with this layout's secret.
+
+    A listener that is still starting up can refuse the first connection, so `unreachable`
+    is retried; any other answer (wrong secret, not a gateway, no secret here) is final.
+    """
+    for attempt in range(attempts):
+        payload, error = status.fetch_status(port, layout)
+        if payload is not None:
+            return True
+        if getattr(error, "kind", None) != "unreachable" or attempt == attempts - 1:
+            return False
+        time.sleep(delay)
+    return False
+
+
 def _init(layout):
     """`chintu-desktop init`: what "Start daemon" prepares, headless, for installers and smoke tests.
 
@@ -540,6 +560,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     args.layout = Layout.detect(repo=args.repo, home=args.home)
     command = args.command or "run"
+    explicit_port = args.port
+    args.port = daemon.resolve_port(args.layout, explicit_port)
 
     if command == "status":
         print(json.dumps(_snapshot(args), indent=2, default=str))
@@ -571,6 +593,9 @@ def main(argv=None):
     except ImportError as error:
         _tray_backend_missing(error)
         return 2
+    if explicit_port is None and args.layout.kind != "repo" and not args.no_daemon:
+        args.port, args.port_notice = daemon.relocate_if_taken(
+            args.layout, args.port, lambda port: _is_our_gateway(args.layout, port))
     DesktopApp(pystray, args).run()
     return 0
 

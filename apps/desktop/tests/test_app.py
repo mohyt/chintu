@@ -465,7 +465,8 @@ class CliTests(unittest.TestCase):
     def test_parser_defaults_and_subcommands(self):
         parser = desktop_app.build_parser()
         args = parser.parse_args([])
-        self.assertEqual((args.port, args.command, args.mono, args.repo, args.home), (8765, None, False, None, None))
+        # No --port parses as None: main() then resolves the saved port or the default.
+        self.assertEqual((args.port, args.command, args.mono, args.repo, args.home), (None, None, False, None, None))
         args = parser.parse_args(["--home", "~/Chintu Data", "status"])
         self.assertEqual(args.home, Path("~/Chintu Data").expanduser().resolve())
         # The shared options are also accepted after the subcommand, and a value before it is kept.
