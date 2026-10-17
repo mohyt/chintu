@@ -27,9 +27,11 @@ jobs:
           python -m pip install uv==0.12.3
           uv venv --python 3.12
           uv pip sync --require-hashes requirements-dev.lock
-          uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway
+          uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway -e apps/desktop
       - name: Contract, lifecycle, adapters, integration and Android core
         run: make PYTHON=.venv/bin/python test demo
+      - name: Desktop tray and gateway supervision
+        run: .venv/bin/python -m unittest discover -s apps/desktop/tests
       - name: Lint the one-line installer
         run: shellcheck install.sh
 
