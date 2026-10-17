@@ -59,7 +59,7 @@ The phone turns your speech into text and sends only the final transcript. The g
 
 ## Install
 
-Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases/latest). The latest release is v0.4.2.
+Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases/latest). The latest release is v0.5.0.
 
 ### Phone (Android)
 
@@ -68,7 +68,7 @@ Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/rele
 3. If Android asks, allow your browser to install unknown apps.
 4. Google Play Protect may say it has not seen this app before. Tap **Scan app** (or install anyway). The APK is signed with the project's release key, so later versions install over earlier ones.
 5. Tap **Install** (or **Update** when an older Chintu is already installed).
-6. Open Chintu and allow the microphone. Optional permissions: **Nearby devices** to use a Bluetooth headset, **coarse location** only to name your city in the greeting (read once per launch, never stored or sent), and **notifications** for results that finish while the app is in the background.
+6. Open Chintu and allow the microphone. To use the wake word, see [Wake word](#wake-word-chintu) below. Optional permissions: **Nearby devices** to use a Bluetooth headset, **coarse location** only to name your city in the greeting (read once per launch, never stored or sent), and **notifications** for results that finish while the app is in the background.
 
 <p>
   <img src="docs/images/install/phone-1-release-page.png" width="200" alt="GitHub release page for Chintu 0.4.2 opened in the phone browser">
@@ -148,7 +148,15 @@ Pair each computer separately. After the first one, the other computers on your 
 - **Automatic sending** is on by default. Turn it off in Settings to review each transcript before it is sent.
 - **Hands-free while the app is open** (Settings) keeps listening between turns while Chintu is in the foreground.
 
-A wake word ("Chintu, …" without touching the phone) and always-on background listening are in development and not released yet. Today, use the mic button or the hands-free toggle.
+### Wake word: "Chintu"
+
+Turn on **Settings → Conversation → Wake word** to talk without touching the phone, even with the screen off or the phone locked.
+
+1. Allow what Chintu asks for: microphone, notifications, **battery: unrestricted** (so Android does not stop the listener) and **Display over other apps** (so Chintu can open itself from the background or over the lock screen; without it you get a tap-to-talk notification instead).
+2. A permanent notification, "Chintu is listening for its name", shows the listener is on. Its **Turn off** button stops it; switch it back on in Settings.
+3. Say **"Chintu"**, wait for the short chime, then give the instruction. Pauses mid-sentence are fine: Chintu sends the instruction after about two seconds of quiet.
+
+The wake word is recognised on the phone (Vosk, offline); no audio leaves the phone until you speak an instruction after the chime. While Chintu is listening or speaking the wake word is ignored, so stop a reply with the button. Android shows its green microphone indicator while the listener is on.
 
 <p>
   <img src="docs/images/install/phone-6-instruction-accepted.png" width="240" alt="Home screen while a task runs: Cobra is working on it, Instruction accepted by Cobra">
@@ -206,7 +214,16 @@ The app is not notarized. Use the one-liner (it clears the quarantine flag), run
 An older build signed with a different key (for example a debug build) is installed. Uninstall it once, then install the release APK. Pairings stored on the phone are lost, so pair each computer again.
 
 **An instruction is cut off before you finish speaking.**
-Android's recogniser ends on a short pause. This is a known issue being tuned. Speak continuously, or turn off automatic sending in Settings to review the transcript before it is sent.
+Fixed in 0.5.0 on Android 13 and later: Chintu reads the microphone itself and ends an instruction after about two seconds of quiet. Update the app. On Android 12 the recogniser still ends on a short pause; speak continuously or turn off automatic sending to review the transcript.
+
+**Saying "Chintu" does nothing.**
+Check that **Wake word** is on in Settings and the "Chintu is listening for its name" notification is showing. After an app update or a phone restart, open Chintu once: Android does not let the listener start the microphone on its own. Allow **battery: unrestricted** for Chintu so Android does not stop it, and wait for the chime before speaking. It is also ignored while Chintu is listening or speaking.
+
+**Chintu wakes up when nobody called it.**
+Ordinary speech does not wake it in testing, but the phrase "chin two" or "chin to" can, because that is how the on-device model spells the wake word. Turn the wake word off with the notification's **Turn off** when that is a problem.
+
+**Chintu opens with a "Chintu heard you" notification instead of the app.**
+"Display over other apps" is not allowed for Chintu. Allow it in Android settings → Apps → Chintu, or tap the notification to talk.
 
 **Where are the logs and files?**
 
