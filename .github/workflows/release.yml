@@ -61,6 +61,14 @@ jobs:
           chintu-desktop --version
           chintu-desktop status --port 8790 | head -40
           chintu-desktop gateway --help > /dev/null
+      - name: Install the amd64 package on Ubuntu 26.04 (Python 3.14) and smoke-test it
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:26.04 sh -ec '
+            apt-get update -qq
+            apt-get install -y -qq /dist/chintu-desktop_*_amd64.deb > /dev/null
+            chintu-desktop --version
+            /opt/chintu/venv/bin/python -c "import cffi, pydantic_core, PIL, rpds, chintu_gateway, chintu_desktop"
+            chintu-desktop gateway --help > /dev/null'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deb

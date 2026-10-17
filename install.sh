@@ -79,7 +79,11 @@ detect() {
       ARCH="$(dpkg --print-architecture)"
       case "$ARCH" in amd64|arm64) ;; *) die "no Debian package for $ARCH" ;; esac
       ASSET="chintu-desktop_${VERSION}_${ARCH}.deb"
-      [ "$release" = "24.04" ] || warn "packages are built for Ubuntu 24.04; this is $pretty"
+      # The package bundles wheels for the system Python of these releases (3.12, 3.13, 3.14).
+      case "$release" in
+        24.04|25.10|26.04|13) ;;
+        *) warn "packages are tested on Ubuntu 24.04 and 26.04 and Debian 13; this is $pretty" ;;
+      esac
       ;;
     Darwin)
       ARCH="$(uname -m)"

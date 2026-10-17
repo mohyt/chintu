@@ -171,7 +171,7 @@ or python.org's, something with a shared `libpython`) and the Xcode command-line
 No sudo, no Docker.
 
 ```sh
-scripts/package/build-dmg.sh                       # build/macos/ scratch, dist/Chintu-0.4.0-arm64.dmg
+scripts/package/build-dmg.sh                       # build/macos/ scratch, dist/Chintu-0.4.1-arm64.dmg
 scripts/package/smoke-macos.sh build/macos/dist/Chintu.app   # re-run the checks on a built app
 ```
 
@@ -237,7 +237,7 @@ Caveats:
 - The build is native to the machine that runs it (arm64 or x86_64); there is no universal
   binary.
 
-## Install on Ubuntu 22.04 / 24.04 (GNOME)
+## Install on Ubuntu 24.04 / 26.04 (GNOME)
 
 GNOME needs the AppIndicator bindings and an extension that displays indicators:
 

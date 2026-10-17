@@ -6,7 +6,7 @@ Chintu ships as three installable packages, published only on GitHub Releases fo
 | --- | --- | --- | --- |
 | `chintu-<version>.apk` | Android 12+ (Pixel) | `scripts/package/build-apk.sh` | The companion app, signed with the Chintu release key |
 | `Chintu-<version>-<arch>.dmg` | macOS 13+ | `scripts/package/build-dmg.sh` | `Chintu.app`: menu-bar tray, gateway daemon and the Claude Agent SDK with its bundled CLI, frozen with PyInstaller |
-| `chintu-desktop_<version>_<arch>.deb` | Ubuntu 24.04 (amd64, arm64) | `scripts/package/build-deb.py` | Tray, gateway and vendored wheels; a venv is created under `/opt/chintu/venv` on install |
+| `chintu-desktop_<version>_<arch>.deb` | Ubuntu 24.04 and 26.04, Debian 13 (amd64, arm64) | `scripts/package/build-deb.py` | Tray, gateway and vendored wheels; a venv is created under `/opt/chintu/venv` on install |
 
 The version comes from the root `VERSION` file. The Android `versionName`, the three Python
 packages and the release tag `v<version>` must all match it; the release workflow refuses a
@@ -75,6 +75,13 @@ The same assets can be published by hand from local builds with
   Verified 17 October 2026 against v0.4.0: clean `ubuntu:24.04` containers on amd64 and arm64
   (installed and started the gateway as a sudo user), and on macOS the download, digest check and
   disk image copy into a scratch folder under the system bash 3.2.
+- **Python versions in the Debian package:** the `.deb` installs into a venv built from the
+  system `python3`, so it carries the version-specific wheels (cffi, pydantic-core, Pillow,
+  rpds-py) for CPython 3.12, 3.13 and 3.14 under `/opt/chintu/wheels/cp3XX`, and the shared
+  pure-Python and abi3 wheels once. postinst installs the set for the running interpreter and
+  stops with a clear message for any other version; `Depends` limits `python3` to 3.12–3.14.
+  v0.4.0 carried only 3.12 wheels and failed on Ubuntu 26.04 ("cffi … is not a supported wheel
+  on this platform").
 - **Android:** open the APK on the phone (allow installs from the browser or `adb install -r`).
   Updates install over the previous version because the key does not change.
 - **macOS:** open the DMG, drag `Chintu.app` to Applications. The app is ad-hoc signed and not

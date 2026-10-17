@@ -9,10 +9,12 @@ Docker wrapper used on macOS). Steps:
    with `python -m build --wheel` from a copy of each source tree, using a throwaway
    virtualenv under the build directory. They are pure Python, so one build serves both
    architectures.
-2. Download the pinned Linux runtime wheels for CPython 3.12 per architecture with
+2. Download the pinned Linux runtime wheels per architecture for every supported CPython
+   (3.12 on Ubuntu 24.04, 3.13 on Debian 13, 3.14 on Ubuntu 26.04) with
    `pip download --only-binary=:all: --platform manylinux_...` (see
-   packaging/debian/requirements-linux.txt). pip evaluates environment markers against
-   the host, so this must run on Linux.
+   packaging/debian/requirements-linux.txt). Wheels that serve every version (pure Python or
+   abi3) go to /opt/chintu/wheels; version-specific ones to /opt/chintu/wheels/cp3XX. pip
+   evaluates environment markers against the host, so this must run on Linux.
 3. Render the 256 px icon with `chintu_desktop.icons`.
 4. Assemble `dist/chintu-desktop_<version>_<arch>.deb`: `debian-binary`,
    `control.tar.gz` (control, md5sums, postinst, postrm) and `data.tar.gz`.
@@ -20,8 +22,9 @@ Docker wrapper used on macOS). Steps:
 Set SOURCE_DATE_EPOCH for reproducible timestamps.
 
 The package installs the wheels, the contract and launcher scripts under /opt/chintu;
-postinst creates `/opt/chintu/venv` (with system site packages visible, so python3-gi's
-`gi` is importable) and installs the wheels into it offline.
+postinst creates `/opt/chintu/venv` with the system python3 (with system site packages
+visible, so python3-gi's `gi` is importable) and installs the shared wheels plus the ones for
+that interpreter into it offline.
 """
 
 import argparse
@@ -30,7 +33,6 @@ import hashlib
 import io
 import math
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -60,6 +62,7 @@ from the phone."""
 
 DEPENDS = ", ".join([
     "python3 (>= 3.12)",
+    "python3 (<< 3.15)",
     "python3-venv",
     "python3-tk",
     "python3-gi",
@@ -70,8 +73,12 @@ RECOMMENDS = "tailscale, gnome-shell-extension-appindicator"
 
 # Debian architecture -> (Python machine name used in wheel tags)
 ARCHES = {"amd64": "x86_64", "arm64": "aarch64"}
-PYTHON_VERSION = "3.12"
-ABI = "cp312"
+# CPython versions with a bundled wheel set: Ubuntu 24.04, Debian 13, Ubuntu 26.04.
+PYTHON_VERSIONS = ("3.12", "3.13", "3.14")
+
+
+def abi(python_version):
+    return "cp" + python_version.replace(".", "")
 PROJECTS = (REPO / "packages" / "agent-adapters", REPO / "services" / "gateway", REPO / "apps" / "desktop")
 PINS_FILE = REPO / "packaging" / "debian" / "requirements-linux.txt"
 CONTRACT = REPO / "contracts" / "openapi.json"
@@ -153,9 +160,15 @@ case "$1" in
         # Recreate the environment from this package's wheels on every install and upgrade.
         rm -rf "$VENV"
         # --system-site-packages makes python3-gi's `gi` importable (pystray's AppIndicator backend).
+        abi="$(python3 -c 'import sys; print("cp%d%d" % sys.version_info[:2])')"
+        if [ ! -d "$WHEELS/$abi" ]; then
+            echo "chintu-desktop: no bundled wheels for Python $abi; supported: {", ".join(abi(v) for v in PYTHON_VERSIONS)}" >&2
+            exit 1
+        fi
         python3 -m venv --system-site-packages "$VENV"
         "$VENV/bin/pip" install --quiet --disable-pip-version-check --no-cache-dir \\
-            --no-index --no-deps --ignore-installed --find-links "$WHEELS" "$WHEELS"/*.whl
+            --no-index --no-deps --ignore-installed --find-links "$WHEELS" --find-links "$WHEELS/$abi" \\
+            "$WHEELS"/*.whl "$WHEELS/$abi"/*.whl
         if command -v gtk-update-icon-cache >/dev/null 2>&1; then
             gtk-update-icon-cache -f -q /usr/share/icons/hicolor || true
         fi
@@ -248,10 +261,15 @@ def control_file(version, arch, installed_size_kib):
 
 
 def data_entries(version, arch, wheel_files, icon_png, epoch):
-    """Everything installed by dpkg, as (path relative to /, no leading ./) entries."""
+    """Everything installed by dpkg, as (path relative to /, no leading ./) entries.
+
+    `wheel_files` maps the folder under /opt/chintu/wheels ("" for shared, "cp312", ...) to wheels.
+    """
     entries = []
-    for wheel in sorted(wheel_files, key=lambda p: p.name):
-        entries.append(Entry(f"{OPT}/wheels/{wheel.name}", 0o644, wheel.read_bytes()))
+    for folder, wheels in sorted(wheel_files.items()):
+        for wheel in sorted(wheels, key=lambda p: p.name):
+            entries.append(Entry(f"{OPT}/wheels/{folder + '/' if folder else ''}{wheel.name}", 0o644,
+                                 wheel.read_bytes()))
     entries.append(Entry(f"{OPT}/share/chintu/openapi.json", 0o644, CONTRACT.read_bytes()))
     for script in ("chintu-desktop", "chintu-gateway"):
         entries.append(Entry(f"{OPT}/bin/{script}", 0o755, wrapper(script).encode()))
@@ -403,16 +421,27 @@ def build_project_wheels(python, build_dir, version):
     return wheels
 
 
-def download_wheels(python, build_dir, arch, pins):
+def download_wheels(python, build_dir, arch, python_version, pins):
     machine = ARCHES[arch]
-    out = build_dir / f"wheels-{arch}"
+    out = build_dir / f"wheels-{arch}" / abi(python_version)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     run([python, "-m", "pip", "download", "--disable-pip-version-check", "--only-binary=:all:",
          "--platform", f"manylinux_2_28_{machine}", "--platform", f"manylinux2014_{machine}",
-         "--platform", f"manylinux_2_17_{machine}", "--python-version", PYTHON_VERSION,
-         "--implementation", "cp", "--abi", ABI, "--abi", "none", "-d", out, *pins])
+         "--platform", f"manylinux_2_17_{machine}", "--python-version", python_version,
+         "--implementation", "cp", "--abi", abi(python_version), "--abi", "none", "-d", out, *pins])
     return out
+
+
+def split_shared(per_abi):
+    """{abi: wheels} -> {"": wheels every version shares, abi: the rest}, by identical file name."""
+    names = [{w.name for w in wheels} for wheels in per_abi.values()]
+    common = set.intersection(*names)
+    first = next(iter(per_abi.values()))
+    layout = {"": [w for w in first if w.name in common]}
+    for key, wheels in per_abi.items():
+        layout[key] = [w for w in wheels if w.name not in common]
+    return layout
 
 
 def check_wheels(arch, wheels, pins):
@@ -444,20 +473,20 @@ def render_icon(python, build_dir):
     return out.read_bytes()
 
 
-def find_wheels(wheels_dir, arch):
-    for candidate in (wheels_dir / arch, wheels_dir / ARCHES[arch], wheels_dir):
+def find_wheels(wheels_dir, arch, abi_tag):
+    for candidate in (wheels_dir / arch / abi_tag, wheels_dir / ARCHES[arch] / abi_tag, wheels_dir / abi_tag):
         wheels = sorted(candidate.glob("*.whl"))
         if wheels:
             return wheels
-    sys.exit(f"build-deb: no wheels for {arch} under {wheels_dir}")
+    sys.exit(f"build-deb: no wheels for {arch} {abi_tag} under {wheels_dir}")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--arch", action="append", choices=sorted(ARCHES), help="repeatable; default: both")
     parser.add_argument("--wheels-dir", type=Path,
-                        help="directory holding already downloaded runtime wheels per arch "
-                             "(<dir>/amd64, <dir>/x86_64, ...) instead of running pip download")
+                        help="directory holding already downloaded runtime wheels per arch and Python "
+                             "(<dir>/amd64/cp312, <dir>/x86_64/cp314, ...) instead of running pip download")
     parser.add_argument("--out", type=Path, default=REPO / "dist", help="output directory (default dist/)")
     parser.add_argument("--build-dir", type=Path, default=REPO / "build" / "deb")
     args = parser.parse_args(argv)
@@ -466,9 +495,6 @@ def main(argv=None):
         sys.exit("build-deb: wheel resolution must run on Linux (pip evaluates pystray's platform markers "
                  "against the host). On a Mac run scripts/package/build-deb.sh, which runs this script "
                  "inside python:3.12-slim with Docker.")
-    if sys.version_info[:2] != (3, 12):
-        print(f"build-deb: warning: running under Python {platform.python_version()}, package targets 3.12",
-              file=sys.stderr)
 
     version = (REPO / "VERSION").read_text().strip()
     arches = args.arch or sorted(ARCHES)
@@ -484,15 +510,23 @@ def main(argv=None):
 
     outputs = []
     for arch in arches:
-        if args.wheels_dir:
-            runtime = find_wheels(args.wheels_dir.resolve(), arch)
-        else:
-            runtime = sorted(download_wheels(python, build_dir, arch, pins).glob("*.whl"))
-        check_wheels(arch, runtime, pins)
-        entries = data_entries(version, arch, project_wheels + runtime, icon_png, epoch)
+        per_abi = {}
+        for python_version in PYTHON_VERSIONS:
+            key = abi(python_version)
+            if args.wheels_dir:
+                runtime = find_wheels(args.wheels_dir.resolve(), arch, key)
+            else:
+                runtime = sorted(download_wheels(python, build_dir, arch, python_version, pins).glob("*.whl"))
+            check_wheels(arch, runtime, pins)
+            per_abi[key] = runtime
+        layout = split_shared(per_abi)
+        layout[""] = project_wheels + layout[""]
+        entries = data_entries(version, arch, layout, icon_png, epoch)
         deb = write_deb(args.out.resolve() / f"{PACKAGE}_{version}_{arch}.deb", version, arch, entries, epoch)
         outputs.append(deb)
-        print(f"built {deb} ({deb.stat().st_size / 1_000_000:.1f} MB, {len(runtime)} runtime wheels)")
+        specific = ", ".join(f"{key}: {len(layout[key])}" for key in per_abi)
+        print(f"built {deb} ({deb.stat().st_size / 1_000_000:.1f} MB, {len(layout[''])} shared wheels; "
+              f"per Python {specific})")
     return 0
 
 
