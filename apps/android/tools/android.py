@@ -24,6 +24,11 @@ ANDROID_ARCHIVES = {
     "linux": ("linux", "d313adb7aedccf6cf0cfca51ec180f0059f5f8f8"),
 }
 PACKAGES = ["platforms;android-35", "build-tools;36.0.0", "platform-tools"]
+# On-device wake word ("Chintu"): Vosk small Indian English model, Apache-2.0, https://alphacephei.com/vosk/models.
+# Unpacked into the app's assets (git-ignored) before every build; the SHA-256 was taken on first download.
+WAKE_MODEL = "vosk-model-small-en-in-0.4"
+WAKE_MODEL_SHA256 = "20663dcac4d5cb783a579c54d98339344a688e4ec6e1b4a4b059fd1235454cc7"
+WAKE_MODEL_ASSETS = PROJECT / "app/src/main/assets/wake-model"
 
 
 def environment() -> dict[str, str]:
@@ -94,6 +99,32 @@ def unpack(archive: Path, destination: Path, archive_root: str) -> None:
             file.chmod(file.stat().st_mode | 0o111)
 
 
+def wake_model() -> None:
+    """Download, verify and unpack the wake-word model into the app assets once per pinned version."""
+    marker = WAKE_MODEL_ASSETS / "uuid"
+    if marker.is_file() and marker.read_text().strip() == WAKE_MODEL_SHA256:
+        return
+    archive = TOOLS / "downloads" / f"{WAKE_MODEL}.zip"
+    download(f"https://alphacephei.com/vosk/models/{archive.name}", archive, "sha256", WAKE_MODEL_SHA256)
+    TOOLS.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="wake-", dir=TOOLS) as temporary:
+        root = Path(temporary)
+        with zipfile.ZipFile(archive) as bundle:
+            for member in bundle.infolist():
+                if not (root / member.filename).resolve().is_relative_to(root.resolve()):
+                    raise RuntimeError("Wake model archive contains an unsafe member path.")
+            bundle.extractall(root)
+        source = root / WAKE_MODEL
+        if not (source / "am").is_dir():
+            raise RuntimeError("Wake model archive does not match the pinned layout.")
+        shutil.rmtree(WAKE_MODEL_ASSETS, ignore_errors=True)
+        WAKE_MODEL_ASSETS.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(source, WAKE_MODEL_ASSETS)
+    # Vosk's StorageService re-copies the assets whenever this file changes.
+    marker.write_text(WAKE_MODEL_SHA256 + "\n")
+    print(f"Wake-word model {WAKE_MODEL} verified and unpacked into {WAKE_MODEL_ASSETS}", flush=True)
+
+
 def fetch(env: dict[str, str]) -> None:
     if sys.platform not in ANDROID_ARCHIVES:
         raise RuntimeError("Bootstrap supports macOS/Linux. Use installed tools on other platforms.")
@@ -105,6 +136,7 @@ def fetch(env: dict[str, str]) -> None:
     android = downloads / f"commandlinetools-{host}-11076708_latest.zip"
     download(f"https://dl.google.com/android/repository/{android.name}", android, "sha1", checksum)
     unpack(android, Path(env["ANDROID_HOME"]) / "cmdline-tools/12.0", "cmdline-tools")
+    wake_model()
     print("Tool archives verified and installed. SDK packages are not installed or licensed.")
     print("Review licenses interactively: python3 tools/android.py licenses")
 
@@ -138,6 +170,7 @@ def build(env: dict[str, str], extra: list[str]) -> None:
     sdk = Path(env["ANDROID_HOME"])
     if not (sdk / "platforms/android-35/android.jar").is_file() or not (sdk / "build-tools/36.0.0").is_dir():
         raise RuntimeError("SDK Platform 35 / Build Tools 36.0.0 missing. Review licenses, then run the sdk command.")
+    wake_model()
     subprocess.run([str(gradle), "--no-daemon", "--console=plain", "-p", str(PROJECT)] +
                    (extra or [":app:assembleDebug", ":app:lintDebug"]), env=env, check=True)
 

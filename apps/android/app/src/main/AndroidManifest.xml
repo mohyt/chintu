@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Wake word: an always-on microphone service, opening the app over other apps or the lock screen
+         when "Chintu" is heard, and staying exempt from battery optimisation so Android does not stop it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <queries>
         <intent><action android:name="android.speech.RecognitionService" /></intent>
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
@@ -15,6 +20,7 @@
         android:fullBackupContent="false" android:usesCleartextTraffic="false"
         android:theme="@style/Theme.Chintu">
         <service android:name=".TaskWatchService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".WakeWordService" android:exported="false" android:foregroundServiceType="microphone" />
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

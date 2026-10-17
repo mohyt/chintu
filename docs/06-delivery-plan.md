@@ -164,7 +164,7 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | NFR-01–03 | M2 private access; M4 acceptance/deduplication/recovery | M5–M7 |
 | NFR-04–06 | Segment timings in M1–M4 | M7 end-to-end latency evidence |
 | NFR-07–10 | M1 speech privacy; M3 capabilities/confinement; M4 resource bounds | M6–M7 |
-| FR-13–14 | M8 wake detector and acoustic tests | Optional V2 integration |
+| FR-13–14 | M8 wake detector and acoustic tests: Vosk wake word on the Pixel 9 Pro, 14/15 caught and 0/15 false alarms offline, device scenarios W1–W9 pass ([2026-10-17](validation/2026-10-17-wake-word.md)) | Owner-voice, battery and headset measurements; FR-14 full duplex |
 
 ## Deferred capabilities
 
