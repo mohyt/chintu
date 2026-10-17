@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chintu-desktop"
-version = "0.4.1"
+version = "0.4.2"
 description = "Menu bar / top panel companion that watches and supervises the local Chintu gateway"
 requires-python = ">=3.12"
 # Deliberately light: the tray toolkit and the image library for the procedurally drawn icon.

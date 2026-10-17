@@ -36,6 +36,7 @@ CONFIG_NAME = "gateway.local.json"
 DATABASE_NAME = "chintu.sqlite3"
 SECRET_NAME = "local.secret"
 GATEWAY_LOG_NAME = "desktop-gateway.log"
+SETTINGS_NAME = "desktop.json"
 CONTRACT_RELATIVE = Path("contracts") / "openapi.json"
 GATEWAY_RELATIVE = Path(".venv") / "bin" / "chintu-gateway"
 SHARE_RELATIVE = Path("share") / "chintu" / "openapi.json"
@@ -63,6 +64,11 @@ class Layout:
     @property
     def gateway_log(self):
         return self.home / GATEWAY_LOG_NAME
+
+    @property
+    def settings(self):
+        """The tray's own settings (the gateway port it chose); the gateway never reads it."""
+        return self.home / SETTINGS_NAME
 
     @property
     def notes_dir(self):

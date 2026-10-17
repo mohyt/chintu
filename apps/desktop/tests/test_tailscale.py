@@ -1,5 +1,7 @@
+import os
 import subprocess
 import unittest
+from unittest import mock
 
 from chintu_desktop import tailscale
 
@@ -98,6 +100,16 @@ class CommandTests(unittest.TestCase):
         ok, message = tailscale.enable_serve(8765, binary="/bin/tailscale", runner=runner)
         self.assertFalse(ok)
         self.assertIn("not enabled", message)
+
+    def test_enable_serve_without_operator_names_the_fix(self):
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr=(
+                "Access denied: serve config denied\nUse 'sudo tailscale serve --bg 8766'.\n"
+                "To not require root, use 'sudo tailscale set --operator=$USER' once.\n"))
+        with mock.patch.dict(os.environ, {"USER": "mohyt"}):
+            ok, message = tailscale.enable_serve(8766, binary="/bin/tailscale", runner=runner)
+        self.assertFalse(ok)
+        self.assertIn("sudo tailscale set --operator=mohyt", message)
 
 
 if __name__ == "__main__":
