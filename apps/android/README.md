@@ -6,7 +6,7 @@ Chintu is a native voice companion for computers on your Tailscale network. Home
 
 ## Build and install
 
-Use JDK 17/21, Gradle 8.11.1, Android SDK Platform 35, Build Tools 35.0.0 and platform-tools. Minimum Android is 12/API31. AGP is 8.9.2; Kotlin is 2.2.20. No Gradle wrapper is checked in. From the repository root:
+Use JDK 17/21, Gradle 9.8.1, Android SDK Platform 35, Build Tools 36.0.0 and platform-tools. Minimum Android is 12/API31. AGP is 9.4.1 with its built-in Kotlin support; the root build pins the Kotlin compiler to 2.4.21. No Gradle wrapper is checked in. From the repository root:
 
 ```sh
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home

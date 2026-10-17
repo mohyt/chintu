@@ -30,13 +30,14 @@ def main():
         "uv": ["uv", "--version"], "codex": ["codex", "--version"],
         "claude": ["claude", "--version"], "tailscale": ["tailscale", "version"],
     }.items()}
-    local_gradle = root / "apps/android/.tooling/gradle-8.11.1/bin/gradle"
+    pinned = re.search(r'^GRADLE_VERSION = "([^"]+)"$', (root / "apps/android/tools/android.py").read_text(), re.M)
+    local_gradle = root / "apps/android/.tooling/gradle-{}/bin/gradle".format(pinned.group(1) if pinned else "")
     report = {
         "host": {"system": platform.system(), "release": platform.release(),
                  "architecture": platform.machine(), "python": platform.python_version()},
         "tools": tools,
         "android": {"sdk_platform_35": (sdk / "platforms/android-35/android.jar").is_file(),
-                    "build_tools_35": (sdk / "build-tools/35.0.0").is_dir(),
+                    "build_tools_36": (sdk / "build-tools/36.0.0").is_dir(),
                     "sdk_license_record_present": (sdk / "licenses/android-sdk-license").is_file(),
                     "gradle_command_present": local_gradle.is_file() or bool(shutil.which("gradle")),
                     "adb_present": bool(shutil.which("adb")) or (sdk / "platform-tools/adb").is_file()},

@@ -1,6 +1,6 @@
 import java.util.Properties
 
-plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+plugins { id("com.android.application") }
 
 // Single source of truth for the app version: the VERSION file at the repository root.
 val chintuVersion: String = rootProject.file("../../VERSION").readText().trim()
