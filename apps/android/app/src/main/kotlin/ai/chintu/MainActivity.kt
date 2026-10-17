@@ -119,6 +119,8 @@ class MainActivity : Activity() {
     private var openAudioAfterPermission = false
     private lateinit var send: Button
     private lateinit var handsFree: Switch
+    private lateinit var wakeWord: Switch
+    private var wakeLaunch = false  // opened by the wake word: listen once the activity is visible
     private lateinit var autoSend: Switch
     private lateinit var online: Switch
     private lateinit var autoSpeech: Switch
@@ -188,6 +190,7 @@ class MainActivity : Activity() {
         audio = AudioRouteController(this, ::audioChanged, ::showStatus)
         renderComputers(); updateDestination(); audioChanged()
         restoreOpenNote()
+        handleWakeIntent(intent)
         if (guard.pending() != null) showStatus("An instruction is waiting for a receipt. Retry it on this computer.")
     }
 
@@ -418,6 +421,12 @@ class MainActivity : Activity() {
                 waitingForRoute = false; handler.removeCallbacks(routeTimeout); speech.cancelRecognition()
             }
         }
+        wakeWord = toggle(voice, "Wake word · say \u201cChintu\u201d any time, even with the screen off",
+            preferences.getBoolean(WakeWordService.PREF_ENABLED, false))
+        wakeWord.setOnCheckedChangeListener { _, enabled ->
+            if (enabled) enableWakeWord()
+            else { preferences.edit().putBoolean(WakeWordService.PREF_ENABLED, false).apply(); WakeWordService.stop(this) }
+        }
         autoSpeech = toggle(voice, "Read replies aloud", preferences.getBoolean("auto_speech", true))
         autoSend = toggle(voice, "Send voice instructions automatically", preferences.getBoolean("auto_send", true))
         quiet = toggle(voice, "Quiet mode · queue silently, read results in Activity", preferences.getBoolean("quiet", false))
@@ -640,6 +649,9 @@ class MainActivity : Activity() {
         showSheet(dialog, tall = true)
     }
     private fun setPhase(requested: VoicePhase) {
+        // The wake-word listener gives the microphone to the conversation and takes it back when idle.
+        WakeWordService.hold(requested == VoicePhase.LISTENING || requested == VoicePhase.SPEAKING ||
+            (requested == VoicePhase.THINKING && ::speech.isInitialized && speech.isListening) || (noteMode && !notePaused))
         if (!::avatar.isInitialized || isDestroyed) return
         val phase = if (requested == VoicePhase.IDLE && working) VoicePhase.THINKING else requested
         avatar.phase = phase
@@ -806,6 +818,46 @@ class MainActivity : Activity() {
         showSheet(dialog); updateList()
     }
     private var audioPickerRefresh: (() -> Unit)? = null
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        if (handleWakeIntent(intent) && foreground) { wakeLaunch = false; onWakeWord() }
+    }
+    /** The wake-word service opened the app: show it over the lock screen and listen once visible. */
+    private fun handleWakeIntent(intent: Intent?): Boolean {
+        if (intent?.action != WakeWordService.ACTION_WAKE) return false
+        wakeLaunch = true; setShowWhenLocked(true); setTurnScreenOn(true)
+        return true
+    }
+    private fun onWakeWord() {
+        if (!foreground) return
+        speech.stopSpeaking(); lastListenAttempt = 0L
+        if (noteMode) { showStatus("Your note is open. Tap ✎ to finish it first."); WakeWordService.hold(false); return }
+        requestListen()
+        // If listening could not start (busy, dialog open, no permission), give the microphone back.
+        handler.postDelayed({ if (!speech.isListening && !speech.isSpeaking) WakeWordService.hold(false) }, 4000)
+    }
+    private fun enableWakeWord() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 4); return
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
+        preferences.edit().putBoolean(WakeWordService.PREF_ENABLED, true).apply()
+        WakeWordService.start(this)
+        showStatus("Say \u201cChintu\u201d, wait for the chime, then speak.")
+        // Stay alive in the background, and allow opening over the lock screen when the wake word is heard.
+        val power = getSystemService(android.os.PowerManager::class.java)
+        if (power != null && !power.isIgnoringBatteryOptimizations(packageName)) {
+            try { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName"))) }
+            catch (_: Exception) { }
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            showStatus("Allow \u201cDisplay over other apps\u201d so \u201cChintu\u201d can open the app from the background.")
+            try { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))) }
+            catch (_: Exception) { }
+        }
+    }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, permissions, results)
         if (!foreground) return
@@ -817,6 +869,9 @@ class MainActivity : Activity() {
             if (openAudioAfterPermission) { openAudioAfterPermission = false; openAudioPicker() }
         } else if (code == 3) {
             if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED) fetchCity()
+        } else if (code == 4) {
+            if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED) enableWakeWord()
+            else { wakeWord.isChecked = false; showStatus("The wake word needs microphone access.") }
         }
     }
     private fun audioChanged() {
@@ -1452,6 +1507,10 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart(); foreground = true
         TaskWatchService.stop(this)
+        WakeWordService.onWake = { onWakeWord() }
+        if (preferences.getBoolean(WakeWordService.PREF_ENABLED, false) && !WakeWordService.running &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) WakeWordService.start(this)
+        if (wakeLaunch) { wakeLaunch = false; greeted = true; handler.postDelayed({ onWakeWord() }, 700) }
         if (noteMode && !notePaused) { muteRecognizerTones(true); showStatus("Back to your note. Keep talking, or tap ✎ to finish."); handler.postDelayed({ if (noteMode && !notePaused && foreground && !inDialog && !busy && !speech.isListening) requestListen() }, 1500) }
         // A result that arrived while the app was away is spoken once, then forgotten.
         preferences.getString(TaskWatchService.PREF_ANNOUNCE, null)?.let { raw ->
@@ -1488,6 +1547,8 @@ class MainActivity : Activity() {
         }
     }
     override fun onStop() {
+        WakeWordService.onWake = null; WakeWordService.hold(false)
+        setShowWhenLocked(false); setTurnScreenOn(false)
         // Keep an in-flight task alive in a foreground service so its result is announced even if the app is away.
         if (working) guard.acceptedTaskId()?.let { id ->
             selectedComputer?.let { TaskWatchService.start(this, it.url, id, it.name, workingInstruction) }

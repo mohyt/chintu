@@ -51,6 +51,8 @@ android {
         versionCode = 6
         versionName = chintuVersion
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
+        // Vosk ships native libraries; phones are arm64, x86_64 keeps the emulator working.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
     signingConfigs {
         create("release") {
@@ -99,4 +101,6 @@ kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarg
 dependencies {
     // Google code scanner: system-provided QR scanning UI, no camera permission or bundled ML model.
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    // Offline wake word ("Chintu"): Vosk speech recognition, Apache-2.0; brings JNA 5.18.1 (Apache-2.0/LGPL-2.1).
+    implementation("com.alphacephei:vosk-android:0.3.75")
 }

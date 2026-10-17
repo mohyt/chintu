@@ -21,6 +21,8 @@ build/
 
 # Local tooling, runtime state and dictated notes never leave this machine
 apps/android/.tooling/
+# Downloaded at build time by apps/android/tools/android.py (pinned SHA-256)
+apps/android/app/src/main/assets/wake-model/
 *.sqlite3
 *.sqlite3-*
 *.worker.lock
