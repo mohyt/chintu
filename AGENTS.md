@@ -1,34 +1,48 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+Chintu (Conversational Hands-free Interface to Networked Terminals & Utilities) is an Android voice companion that talks over Tailscale to a daemon on the owner's Mac or Ubuntu machines, where a Claude Agent SDK runtime performs tasks. The repository holds the phone app, the gateway daemon, the agent adapters, the desktop tray app, the shared wire contract, packaging and the design documents. `README.md` is the entry point; `docs/07-decisions-and-sources.md` is the decision register.
 
-Chintu is currently a design-only project for voice-controlled Claude/Codex tasks on Ubuntu through an Android companion and Tailscale. `docs/` contains seven numbered Markdown documents covering requirements, architecture, audio, agent contracts, security, delivery, and decisions. No source code, tests, or assets exist yet.
+## Project Structure
 
-Start with `docs/01-requirements.md`. Treat `docs/07-decisions-and-sources.md` as the authoritative decision register. The proposed implementation layout in `docs/02-architecture.md` includes `apps/android/`, `services/gateway/`, `packages/agent-adapters/`, `tests/`, `deploy/`, and `config/`; these directories are not implemented.
+| Path | What lives there |
+| --- | --- |
+| `apps/android/` | Kotlin app (API 31+): speech, audio routing, pairing, activity and note modes; `tools/android.py` provisions a workspace-local SDK and Gradle |
+| `apps/desktop/` | Python tray app for macOS and GNOME: phone presence, QR pairing, gateway supervision, Tailscale Serve, revocation |
+| `services/gateway/` | FastAPI gateway on loopback with SQLite task store, pairing, local-proof endpoints and voice notes |
+| `packages/agent-adapters/` | Claude Agent SDK adapter, execution-profile confinement and the scripted fixture |
+| `contracts/` | OpenAPI 3.1 contract, adapter protocol and wire examples; `scripts/check_contract.py` validates them |
+| `tests/` | Integration tests across gateway and adapters |
+| `packaging/`, `scripts/package/` | APK, macOS app bundle and Debian package builds; `.github/workflows/release.yml` publishes them |
+| `deploy/`, `config/` | launchd and systemd units, example operator configuration |
+| `docs/` | Numbered design documents, validation records and release notes |
 
-## Build, Test, and Development Commands
+## Build and Test
 
-There are no configured build, runtime, package-management, or automated test commands. Use these documentation inspection commands from the project root:
+```sh
+make bootstrap                              # uv venv + hash-pinned requirements-dev.lock + editable packages
+make PYTHON=.venv/bin/python test demo      # contract, gateway, adapters, integration, Android core logic
+.venv/bin/python -m unittest discover -s apps/desktop/tests
+python3 apps/android/tools/android.py build :app:assembleDebug :app:lintDebug
+scripts/package/build-apk.sh | build-dmg.sh | build-deb.sh
+```
 
-- `rg --files docs` — list design documents.
-- `rg -n 'FR-|NFR-|D[0-9]+|Q[0-9]+' docs` — locate requirements, decisions, and open questions.
+`make test-android-core` needs `JAVA_HOME` pointing at a JDK 17 or 21. Gradle and the Android SDK are fetched into `apps/android/.tooling/` and are never taken from `PATH`. CI (`.github/workflows/verify.yml`) runs the Python suites and the Android build on every push and pull request.
 
-Document actual setup and verification commands when implementation is authorized; do not present proposed dependencies as installed tooling.
+## Conventions
 
-## Coding Style & Naming Conventions
+- Python 3.12, standard library first, `unittest` for tests, no formatter or linter configured; keep modules small and functions pure where the tray or the gateway renders state from them.
+- Kotlin for Android with procedural Canvas drawing and no third-party UI libraries; keep dialogs as in-app sheets.
+- Every HTTP route must exist in `contracts/openapi.json` first; the gateway validates payloads against it and the checker runs in CI.
+- Documents follow the `NN-kebab-case.md` pattern with requirement IDs (`FR-01`, `NFR-01`) and decision IDs (`D1`); keep confirmed facts, proposals and measured evidence distinct. Record behaviour changes in the validation matrix of `docs/06-delivery-plan.md`.
 
-Follow the existing Markdown style: descriptive headings, short paragraphs, hyphen bullets, tables for comparable facts, and relative links between documents. Preserve the `NN-kebab-case.md` naming pattern, requirement IDs (`FR-01`, `NFR-01`), and decision/question IDs (`D1`, `Q1`). Keep confirmed facts, proposals, and measured evidence distinct.
+## Versions and Releases
 
-No code indentation standard, formatter, or linter is configured. Establish language-specific conventions when Python/Kotlin implementation begins.
+The root `VERSION` file is the single version; the Android `versionName`, the three `pyproject.toml` files and `chintu_desktop.__version__` must match it. Tagging `v<version>` builds and publishes the packages. See `docs/11-packaging-and-releases.md`.
 
-## Testing Guidelines
+## Commits and Pull Requests
 
-For documentation changes, check relative links and consistency across requirements, contracts, decisions, and milestones. Update the validation matrix in `docs/06-delivery-plan.md` when behavior changes. No testing framework, test naming convention, or coverage threshold exists yet. Future tests should cover submission retries, recovery, approvals, cancellation, and physical-device audio behavior described in that matrix.
+Concise imperative subjects (`Harden local endpoints`, `docs: clarify cancellation outcomes`), no attribution trailers. Pull requests describe the change, the affected requirement or decision IDs, the validation performed and open questions; include screenshots for UI changes.
 
-## Commit & Pull Request Guidelines
+## Security and Scope
 
-This directory has no Git metadata or commit history, so no existing commit convention can be inferred. When version control is introduced, use concise imperative subjects, such as `docs: clarify cancellation outcomes`. Pull requests should describe the change, affected requirement/decision IDs, validation performed, and unresolved questions. Include screenshots when changing a future UI.
-
-## Security & Scope
-
-Keep work documentation-only until implementation is requested. Never commit credentials or raw audio. Preserve task-scoped authorization and distinguish stopping speech from cancelling execution, as specified in the design documents.
+Never commit credentials, keystores, dictated notes, databases or raw audio; `.gitignore` covers `var/`, `*.jks`, `notes/` and `*.sqlite3`. Local endpoints require the per-start secret in `var/local.secret`; `inspect` and `develop` profiles are workspace-confined through the PreToolUse hook. Keep task-scoped authorisation and the distinction between stopping speech and cancelling execution as the design documents specify. Report vulnerabilities as described in `SECURITY.md`.

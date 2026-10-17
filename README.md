@@ -8,7 +8,15 @@ The [Chintu experience](docs/10-chintu-experience.md) uses a minimal purple-orb 
 
 ## Install
 
-Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases): the Android APK, a macOS disk image with the menu-bar app and daemon, and Debian packages for Ubuntu 24.04. Install the desktop app on each computer, pair the phone from its QR window, and talk. See [packaging and releases](docs/11-packaging-and-releases.md) for the caveats (ad-hoc signed macOS app, Tailscale installed separately) and for building the packages yourself.
+Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases): the Android APK, a macOS disk image with the menu-bar app and daemon, and Debian packages for Ubuntu 24.04. Install the desktop app on each computer, pair the phone from its QR window, and talk. On Ubuntu/Debian (amd64, arm64) or an Apple silicon Mac, one command picks the right package, verifies its SHA-256 and starts the tray:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mohyt/chintu/main/install.sh | bash
+```
+
+`CHINTU_VERSION=0.4.0` pins a release. See [packaging and releases](docs/11-packaging-and-releases.md) for the caveats and for building the packages yourself.
+
+What the signatures mean: the APK is signed with the maintainer's long-lived release key, so updates install over each other. The macOS app is ad-hoc signed and not notarized, so the first launch needs right-click → Open. The Debian packages are unsigned; check the checksums GitHub shows beside each release asset. Tailscale and a Claude Code sign-in are installed separately on each computer. Security reports: see [SECURITY.md](SECURITY.md).
 
 ## Contract first
 

@@ -63,6 +63,18 @@ The same assets can be published by hand from local builds with
 
 ## Installing
 
+- **One command (Ubuntu/Debian amd64 and arm64, Apple silicon macOS):**
+  `curl -fsSL https://raw.githubusercontent.com/mohyt/chintu/main/install.sh | bash`. The root
+  `install.sh` reads the release from the GitHub API (`CHINTU_VERSION` pins one, `GITHUB_TOKEN`
+  is needed only while the repository is private), downloads the asset for the OS and CPU, checks
+  it against the SHA-256 digest GitHub records for the asset (or the release's `SHA256SUMS`), then
+  installs with `apt-get` or copies `Chintu.app` into `/Applications` and clears quarantine. On
+  Linux it also runs `chintu-desktop init` and `install-autostart` and starts the tray when a
+  graphical session is present (`CHINTU_NO_START=1` skips that). It ends with Tailscale and Claude
+  Code sign-in hints. The release workflow attaches `install.sh` and `SHA256SUMS` to each release.
+  Verified 17 October 2026 against v0.4.0: clean `ubuntu:24.04` containers on amd64 and arm64
+  (installed and started the gateway as a sudo user), and on macOS the download, digest check and
+  disk image copy into a scratch folder under the system bash 3.2.
 - **Android:** open the APK on the phone (allow installs from the browser or `adb install -r`).
   Updates install over the previous version because the key does not change.
 - **macOS:** open the DMG, drag `Chintu.app` to Applications. The app is ad-hoc signed and not
@@ -89,6 +101,14 @@ instead of assuming it:
 
 Claude Code sign-in is per machine: the gateway uses the owner's existing claude.ai login (the
 same `~/.claude` credentials Claude Code uses), which the bundled CLI picks up.
+
+## Repository protections
+
+`scripts/github-hardening.sh` applies the GitHub-side controls once the repository is public:
+Dependabot alerts and automated fixes, secret scanning with push protection, branch protection on
+`main` (CI must pass, no force pushes or deletion; the owner may still push directly) and read-only
+workflow tokens. CI also scans the whole history with a checksum-pinned gitleaks on every push.
+Vulnerability reports follow `SECURITY.md`.
 
 ## Limits of the current packaging
 

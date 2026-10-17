@@ -105,7 +105,10 @@ jobs:
           if [ "$tag" != "v${version}" ]; then
             echo "Tag $tag does not match VERSION $version"; exit 1
           fi
+          cp install.sh dist/
+          (cd dist && sha256sum -- *.apk *.deb *.dmg install.sh > SHA256SUMS)
           ls -l dist
+          cat dist/SHA256SUMS
           if ! gh release view "$tag" > /dev/null 2>&1; then
             gh release create "$tag" --title "Chintu $version" --notes-file docs/releases/"$tag".md \
               || gh release create "$tag" --title "Chintu $version" --generate-notes

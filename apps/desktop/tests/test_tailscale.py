@@ -4,7 +4,7 @@ import unittest
 from chintu_desktop import tailscale
 
 # Captured from `tailscale serve status` 1.104 on macOS.
-SAMPLE = """https://mohyt-mac.tail4ee147.ts.net (tailnet only)
+SAMPLE = """https://host.example.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8765
 
 """
@@ -20,7 +20,7 @@ https://host.tail.ts.net:8443 (Funnel on)
 
 class ParseTests(unittest.TestCase):
     def test_enabled_for_our_port(self):
-        self.assertEqual(tailscale.parse_serve_status(SAMPLE, 8765), (True, "https://mohyt-mac.tail4ee147.ts.net"))
+        self.assertEqual(tailscale.parse_serve_status(SAMPLE, 8765), (True, "https://host.example.ts.net"))
 
     def test_other_port_is_not_ours(self):
         self.assertEqual(tailscale.parse_serve_status(SAMPLE, 9000), (False, None))
@@ -61,7 +61,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(calls, [["/bin/tailscale", "serve", "status"]])
         self.assertTrue(result.available)
         self.assertTrue(result.enabled)
-        self.assertEqual(result.url, "https://mohyt-mac.tail4ee147.ts.net")
+        self.assertEqual(result.url, "https://host.example.ts.net")
 
     def test_serve_status_without_binary(self):
         real = tailscale.find_binary
