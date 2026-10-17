@@ -48,7 +48,7 @@ android {
         applicationId = "ai.chintu"
         minSdk = 31
         targetSdk = 35
-        versionCode = 6
+        versionCode = 7
         versionName = chintuVersion
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
         // Vosk ships native libraries; phones are arm64, x86_64 keeps the emulator working.

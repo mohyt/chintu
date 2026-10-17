@@ -181,7 +181,7 @@ or python.org's, something with a shared `libpython`) and the Xcode command-line
 No sudo, no Docker.
 
 ```sh
-scripts/package/build-dmg.sh                       # build/macos/ scratch, dist/Chintu-0.4.2-arm64.dmg
+scripts/package/build-dmg.sh                       # build/macos/ scratch, dist/Chintu-0.5.0-arm64.dmg
 scripts/package/smoke-macos.sh build/macos/dist/Chintu.app   # re-run the checks on a built app
 ```
 
