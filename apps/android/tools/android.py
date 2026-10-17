@@ -15,15 +15,15 @@ import zipfile
 
 PROJECT = Path(__file__).resolve().parents[1]
 TOOLS = PROJECT / ".tooling"
-GRADLE_VERSION = "8.11.1"
-GRADLE_SHA256 = "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6"
+GRADLE_VERSION = "9.8.1"
+GRADLE_SHA256 = "dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f"
 # Archived Google repository metadata supplies SHA-1 for command-line tools 12.0.
 # https://dl.google.com/android/repository/repository2-1.xml (remotePackage cmdline-tools;12.0)
 ANDROID_ARCHIVES = {
     "darwin": ("mac", "37fb7dd41005b3b4ca6ea48ac27074b6fc4e3236"),
     "linux": ("linux", "d313adb7aedccf6cf0cfca51ec180f0059f5f8f8"),
 }
-PACKAGES = ["platforms;android-35", "build-tools;35.0.0", "platform-tools"]
+PACKAGES = ["platforms;android-35", "build-tools;36.0.0", "platform-tools"]
 
 
 def environment() -> dict[str, str]:
@@ -129,15 +129,15 @@ def build(env: dict[str, str], extra: list[str]) -> None:
     if not gradle.is_file():
         installed = shutil.which("gradle")
         if not installed:
-            raise RuntimeError("Run python3 tools/android.py fetch first, or provision Gradle 8.11.1 on PATH.")
+            raise RuntimeError(f"Run python3 tools/android.py fetch first, or provision Gradle {GRADLE_VERSION} on PATH.")
         version = subprocess.run([installed, "--version"], env=env, text=True,
                                  capture_output=True, check=True).stdout
         if not re.search(r"^Gradle " + re.escape(GRADLE_VERSION) + r"$", version, re.MULTILINE):
-            raise RuntimeError("Installed Gradle must be version 8.11.1.")
+            raise RuntimeError(f"Installed Gradle must be version {GRADLE_VERSION}.")
         gradle = Path(installed)
     sdk = Path(env["ANDROID_HOME"])
-    if not (sdk / "platforms/android-35/android.jar").is_file() or not (sdk / "build-tools/35.0.0").is_dir():
-        raise RuntimeError("SDK Platform 35 / Build Tools 35.0.0 missing. Review licenses, then run the sdk command.")
+    if not (sdk / "platforms/android-35/android.jar").is_file() or not (sdk / "build-tools/36.0.0").is_dir():
+        raise RuntimeError("SDK Platform 35 / Build Tools 36.0.0 missing. Review licenses, then run the sdk command.")
     subprocess.run([str(gradle), "--no-daemon", "--console=plain", "-p", str(PROJECT)] +
                    (extra or [":app:assembleDebug", ":app:lintDebug"]), env=env, check=True)
 
@@ -163,7 +163,7 @@ def main() -> int:
             print(f"JAVA_HOME={env['JAVA_HOME']}")
             print(f"ANDROID_HOME={env['ANDROID_HOME']}")
             print(f"GRADLE_USER_HOME={env['GRADLE_USER_HOME']}")
-            for package in ["platforms/android-35/android.jar", "build-tools/35.0.0", "licenses/android-sdk-license"]:
+            for package in ["platforms/android-35/android.jar", "build-tools/36.0.0", "licenses/android-sdk-license"]:
                 print(f"{package}: {'present' if (Path(env['ANDROID_HOME']) / package).exists() else 'missing'}")
         return 0
     except (RuntimeError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:

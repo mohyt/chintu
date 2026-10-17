@@ -19,7 +19,7 @@
 #
 # Toolchain: python3 apps/android/tools/android.py provisions Gradle and the command-line tools under
 # apps/android/.tooling/ (or honours ANDROID_HOME / ANDROID_SDK_ROOT) and uses JAVA_HOME, defaulting
-# to the Homebrew JDK 21 on macOS. SDK Platform 35 and Build Tools 35.0.0 must already be installed
+# to the Homebrew JDK 21 on macOS. SDK Platform 35 and Build Tools 36.0.0 must already be installed
 # (GitHub's ubuntu runners ship them in ANDROID_HOME; locally run the "licenses" and "sdk" commands).
 set -euo pipefail
 
@@ -28,7 +28,8 @@ cd "$ROOT"
 
 ANDROID_PY="python3 apps/android/tools/android.py"
 TOOLING="$ROOT/apps/android/.tooling"
-BUILD_TOOLS_VERSION="35.0.0"
+BUILD_TOOLS_VERSION="36.0.0"
+GRADLE_VERSION="$(sed -n 's/^GRADLE_VERSION = "\(.*\)"$/\1/p' apps/android/tools/android.py)"
 
 VERSION=$(tr -d '[:space:]' < VERSION)
 [ -n "$VERSION" ] || { echo "VERSION file is empty" >&2; exit 1; }
@@ -44,7 +45,7 @@ fi
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$TOOLING/sdk}}
 # android.py only accepts its own pinned Gradle under .tooling, never one found on PATH (CI runners have one).
-if [ ! -x "$TOOLING/gradle-8.11.1/bin/gradle" ]; then
+if [ ! -x "$TOOLING/gradle-$GRADLE_VERSION/bin/gradle" ]; then
   echo "==> Pinned Gradle missing; fetching pinned tool archives"
   $ANDROID_PY fetch
 elif [ ! -d "$SDK/build-tools/$BUILD_TOOLS_VERSION" ]; then
