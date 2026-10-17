@@ -7,7 +7,7 @@ name = "chintu-gateway"
 version = "0.4.0"
 description = "Private text-only Chintu gateway and durable fixture task manager"
 requires-python = ">=3.12"
-dependencies = ["fastapi==0.141.1", "starlette==1.3.1", "uvicorn>=0.30,<1", "jsonschema>=4.23,<5", "segno>=1.6,<2", "chintu-adapters>=0.1.0"]
+dependencies = ["fastapi==0.143.0", "starlette==1.8.0", "uvicorn>=0.30,<1", "jsonschema>=4.23,<5", "segno>=1.6,<2", "chintu-adapters>=0.1.0"]
 
 [project.optional-dependencies]
 test = ["httpx>=0.28,<1"]

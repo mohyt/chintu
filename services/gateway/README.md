@@ -278,7 +278,7 @@ repository's shared file; pass `contract_path`/`--contract` when installed elsew
 ## Verification environment
 
 The current 47 gateway tests pass in the workspace Python 3.12 environment with fresh
-SHA-256-verified wheels, FastAPI 0.141.1 and Starlette 1.3.1. The six `claude-agent`
+SHA-256-verified wheels, FastAPI 0.143.0 and Starlette 1.8.0 (re-run 17 October 2026). The six `claude-agent`
 tests use an in-process fake SDK module; one real inspect-profile call was run separately
 through `scripts/demo_agent_sdk.py` on 10 October 2026. The initial fixture tests
 also passed using read-only caches when direct dependency downloads failed DNS. These

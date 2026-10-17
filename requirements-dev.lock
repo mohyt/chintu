@@ -371,9 +371,9 @@ cryptography==50.0.2 \
     --hash=sha256:fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
 
-fastapi==0.141.1 \
-    --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
-    --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
+fastapi==0.143.0 \
+    --hash=sha256:1acffe48206a80917cf7dac21992b5c44b25384e8902bf745c1fd9dabcf6c51f \
+    --hash=sha256:3e9395fd35276425b61b516a31fdd7c77fe2af83e41b4da22e30696fb1304c5d
 
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
@@ -1012,9 +1012,9 @@ sse-starlette==3.5.0 \
     --hash=sha256:3e6e1070df3f0f5d9cea81496de92dbb72f6721871d99748ece67441dd8b7997 \
     --hash=sha256:75de713aa8a9441513cc283220826da079d982770965b951e9437720e8bafdb2
 
-starlette==1.3.1 \
-    --hash=sha256:05d0213193f2fbaae60e2ecb593b4add4262ad4e46536b54abe36f11a71724e0 \
-    --hash=sha256:c7372aae11c3c3f26a42df7bd626cec2f47d03483d261d369516a615a53714c6
+starlette==1.8.0 \
+    --hash=sha256:1565dc0b35d5737a271ed1e0e04e949f4e81198799f216d2667b0a0fb9cf9522 \
+    --hash=sha256:dfdd6b29c26483288088d990eee59631dedadd66ce20d203402a7ca8e3c4656f
 
 truststore==0.10.4 ; sys_platform != 'emscripten' \
     --hash=sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301 \

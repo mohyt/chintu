@@ -7,7 +7,7 @@ export PYTHONDONTWRITEBYTECODE := 1
 bootstrap:
 	uv venv --allow-existing --python 3.12
 	uv pip sync --require-hashes requirements-dev.lock
-	uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway
+	uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway -e apps/desktop
 
 test: contract test-gateway test-adapters test-integration test-android-core
 
