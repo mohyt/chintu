@@ -654,6 +654,9 @@ class MainActivity : Activity() {
             (requested == VoicePhase.THINKING && ::speech.isInitialized && speech.isListening) || (noteMode && !notePaused))
         if (!::avatar.isInitialized || isDestroyed) return
         val phase = if (requested == VoicePhase.IDLE && working) VoicePhase.THINKING else requested
+        // Keep the screen on through a spoken turn (it matters over the lock screen, whose timeout is short).
+        if (phase == VoicePhase.IDLE) window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         avatar.phase = phase
         phaseLabel.alpha = 1f
         phaseLabel.text = when (phase) {
@@ -828,12 +831,15 @@ class MainActivity : Activity() {
         wakeLaunch = true; setShowWhenLocked(true); setTurnScreenOn(true)
         return true
     }
-    private fun onWakeWord() {
+    private fun onWakeWord(attempt: Int = 0) {
         if (!foreground) return
         speech.stopSpeaking(); lastListenAttempt = 0L
         if (noteMode) { showStatus("Your note is open. Tap ✎ to finish it first."); WakeWordService.hold(false); return }
+        // Opening the app from the background reconnects to the computer first; listen as soon as that is done
+        // instead of relying on the hands-free retry, which only runs while hands-free is on.
+        if (busy && attempt < 20) { showStatus("One moment, connecting…"); handler.postDelayed({ onWakeWord(attempt + 1) }, 400); return }
         requestListen()
-        // If listening could not start (busy, dialog open, no permission), give the microphone back.
+        // If listening could not start (dialog open, no permission), give the microphone back.
         handler.postDelayed({ if (!speech.isListening && !speech.isSpeaking) WakeWordService.hold(false) }, 4000)
     }
     private fun enableWakeWord() {
@@ -909,6 +915,8 @@ class MainActivity : Activity() {
         autoRetries = 0
         if (noteMode) { flushNote(text, final = true); handler.postDelayed({ if (noteMode && !notePaused && foreground && !inDialog && !speech.isListening) requestListen() }, 400); return }
         val command = VoiceCommand.parse(text)
+        android.util.Log.i("Chintu", "utterance: kind=${command.kind()} words=${text.trim().split(Regex("\\s+")).size} " +
+            "pending=${guard.pending() != null} computer=${selectedComputer != null} connected=$connected autoSend=${autoSend.isChecked}")
         when (command.kind()) {
             VoiceCommand.Kind.SWITCH_DESTINATION -> switchByName(command.destinationName())
             VoiceCommand.Kind.UNKNOWN_COMMAND -> respond("Try “Chintu, switch to” followed by a saved computer name.")
