@@ -27,13 +27,15 @@ gh api -X PATCH "repos/$repo" --input - > /dev/null <<'JSON'
                             "secret_scanning_push_protection": {"status": "enabled"}}}
 JSON
 
-echo "==> Branch protection on $branch: CI must pass, no force pushes, no deletion"
+echo "==> Branch protection on $branch: pull request with owner approval, CI must pass, no force pushes, no deletion"
 # enforce_admins stays off so the owner can still push signed commits straight to main;
-# everyone else goes through a pull request that must pass the verify workflow.
+# everyone else (collaborators included) opens a pull request, from a branch or a fork, that
+# needs one approving review and a passing verify workflow before it can be merged.
 gh api -X PUT "repos/$repo/branches/$branch/protection" --input - > /dev/null <<'JSON'
 {"required_status_checks": {"strict": true, "contexts": ["python-and-core", "android", "secrets"]},
  "enforce_admins": false,
- "required_pull_request_reviews": null,
+ "required_pull_request_reviews": {"required_approving_review_count": 1, "dismiss_stale_reviews": true,
+                                  "require_last_push_approval": true},
  "restrictions": null,
  "allow_force_pushes": false,
  "allow_deletions": false,
@@ -46,5 +48,5 @@ gh api -X PUT "repos/$repo/actions/permissions/workflow" --input - > /dev/null <
 JSON
 
 gh api "repos/$repo" --jq '.security_and_analysis'
-gh api "repos/$repo/branches/$branch/protection" --jq '{checks: .required_status_checks.contexts, force: .allow_force_pushes.enabled, delete: .allow_deletions.enabled}'
+gh api "repos/$repo/branches/$branch/protection" --jq '{checks: .required_status_checks.contexts, approvals: .required_pull_request_reviews.required_approving_review_count, admins_bypass: (.enforce_admins.enabled | not), force: .allow_force_pushes.enabled, delete: .allow_deletions.enabled}'
 echo "done"
