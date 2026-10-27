@@ -123,6 +123,14 @@ def speech_summary(text: str, limit: int = 600) -> str:
     return cut.rstrip() + "…"
 
 
+def _chunks(text: str, limit: int = 2000):
+    """Consecutive pieces of ``text`` of at most ``limit`` UTF-8 bytes, never splitting a character."""
+    while text:
+        chunk = bounded_text(text, limit) or text[0]
+        yield chunk
+        text = text[len(chunk):]
+
+
 def final_result(summary: str, *, error: str | None = None, partial_effects: bool = False) -> dict:
     payload = result(summary, error=error, partial_effects=partial_effects)
     payload["speech_text"] = speech_summary(payload["summary"]) or payload["summary"]
@@ -148,7 +156,8 @@ class ClaudeAgentAdapter:
                  max_turns: int | None = None, timeout_seconds: float = 1800, stop_seconds: float = 10,
                  max_progress_events: int = 150, max_output_events: int = 60, sdk=None,
                  persona: str | None = DEFAULT_PERSONA, probe_seconds: float = 10,
-                 catalog_seconds: float = 300) -> None:
+                 catalog_seconds: float = 300, stream_text: bool = True, max_delta_events: int = 800,
+                 max_delta_bytes: int = 256 * 1024, delta_chars: int = 400, delta_seconds: float = 0.4) -> None:
         self.executable = executable
         self.persona = persona
         self.model = model
@@ -163,6 +172,12 @@ class ClaudeAgentAdapter:
         self._clients: dict[str, object] = {}
         self._active: set[str] = set()
         self._cancelled: set[str] = set()
+        # Reply text streams to the phone as ``output_delta`` events, batched by size or time.
+        self.stream_text = stream_text
+        self.max_delta_events = max_delta_events
+        self.max_delta_bytes = max_delta_bytes
+        self.delta_chars = delta_chars
+        self.delta_seconds = delta_seconds
         self.probe_seconds = probe_seconds
         self.catalog_seconds = catalog_seconds
         # Tool names each profile's last session announced in its init message, and recent probe results.
@@ -256,6 +271,8 @@ class ClaudeAgentAdapter:
             options["system_prompt"] = {"type": "preset", "preset": "claude_code", "append": self.persona}
         if command.provider_session_id:
             options["resume"] = command.provider_session_id
+        if self.stream_text:
+            options["include_partial_messages"] = True
         if self.max_turns is not None:
             options["max_turns"] = self.max_turns
         executable = self.resolved_executable()
@@ -329,6 +346,20 @@ class ClaudeAgentAdapter:
 
     # -- execution --------------------------------------------------------
 
+    @staticmethod
+    def _stream_text(sdk, message) -> tuple[str | None, bool]:
+        """(top-level reply text in a raw stream event, whether the event ends a block)."""
+        kind = getattr(sdk, "StreamEvent", None)
+        if kind is None or not isinstance(message, kind) or message.parent_tool_use_id:
+            return None, False
+        event = message.event if isinstance(message.event, dict) else {}
+        if event.get("type") in ("content_block_stop", "message_stop"):
+            return None, True
+        delta = event.get("delta") if event.get("type") == "content_block_delta" else None
+        if isinstance(delta, dict) and delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+            return delta["text"], False
+        return None, False
+
     async def cancel(self, attempt_id: str) -> None:
         if attempt_id not in self._active:
             return
@@ -367,6 +398,7 @@ class ClaudeAgentAdapter:
         terminal = None
         final_text = ""
         progress_count = output_count = 0
+        streamed, streamed_events, streamed_bytes, last_flush = "", 0, 0, 0.0
         notes: list[str] = []
         effects_possible = command.execution_profile != "inspect"
         try:
@@ -418,6 +450,27 @@ class ClaudeAgentAdapter:
                     break
                 if not started:
                     continue
+                piece, block_end = self._stream_text(sdk, message)
+                if piece is not None or block_end:
+                    # Partial text is held briefly so the phone gets readable pieces, not single tokens.
+                    room = streamed_events < self.max_delta_events and streamed_bytes < self.max_delta_bytes
+                    if piece and room:
+                        streamed += piece
+                    now = asyncio.get_running_loop().time()
+                    if streamed and (block_end or len(streamed) >= self.delta_chars or now - last_flush >= self.delta_seconds):
+                        for chunk in _chunks(streamed):
+                            streamed_events += 1
+                            streamed_bytes += len(chunk.encode("utf-8"))
+                            yield AdapterEvent("output_delta", {"text": chunk}, session)
+                        streamed, last_flush = "", now
+                    continue
+                if streamed:
+                    # A finished message or tool call closes any streamed block left open.
+                    for chunk in _chunks(streamed):
+                        streamed_events += 1
+                        streamed_bytes += len(chunk.encode("utf-8"))
+                        yield AdapterEvent("output_delta", {"text": chunk}, session)
+                    streamed = ""
                 pending = []
                 if isinstance(message, sdk.AssistantMessage) and not message.parent_tool_use_id:
                     texts = []

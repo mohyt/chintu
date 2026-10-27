@@ -211,6 +211,38 @@ class ClaudeAgentAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fake.clients[-1].disconnected)
         self.assertEqual(self.adapter()._clients, {})
 
+    async def test_reply_text_streams_as_ordered_deltas_before_the_finished_output(self):
+        adapter = self.adapter(delta_seconds=3600)
+        events = await self.collect(adapter, self.command("[stream]"))
+        self.assertTrue(fake.clients[-1].options.kwargs["include_partial_messages"])
+        kinds = [event.kind for event in events]
+        deltas = [event.payload["text"] for event in events if event.kind == "output_delta"]
+        self.assertEqual("".join(deltas), fake.STREAMED)
+        self.assertTrue(all(len(piece) <= 410 for piece in deltas))
+        self.assertGreater(len(deltas), 2)
+        self.assertLess(kinds.index("output_delta"), kinds.index("output"))
+        self.assertEqual(kinds[-1], "succeeded")
+        serialized = json.dumps([event.payload for event in events])
+        self.assertNotIn("SUBAGENT", serialized)
+        self.assertNotIn("partial_json", serialized)
+
+    async def test_streaming_respects_its_budget_and_can_be_switched_off(self):
+        events = await self.collect(self.adapter(max_delta_events=2, delta_seconds=3600), self.command("[stream]"))
+        deltas = [event for event in events if event.kind == "output_delta"]
+        self.assertEqual(len(deltas), 2)
+        outputs = [event.payload["text"] for event in events if event.kind == "output"]
+        self.assertEqual(outputs, [fake.STREAMED[:2000]])  # The finished output still carries the reply.
+        quiet = await self.collect(self.adapter(stream_text=False), self.command("[stream]"))
+        self.assertNotIn("include_partial_messages", fake.clients[-1].options.kwargs)
+        self.assertNotIn("output_delta", [event.kind for event in quiet])
+
+    def test_chunks_never_split_characters(self):
+        from chintu_adapters.agent_sdk import _chunks
+        text = "é" * 1500 + "x"
+        pieces = list(_chunks(text, 1000))
+        self.assertEqual("".join(pieces), text)
+        self.assertTrue(all(len(piece.encode("utf-8")) <= 1000 for piece in pieces))
+
     async def test_resume_passes_session_id(self):
         adapter = self.adapter()
         events = await self.collect(adapter, self.command("follow", provider_session_id=SESSION))

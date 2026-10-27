@@ -79,6 +79,9 @@ for invalid in (
 page = json.loads((ROOT / "contracts/examples/event-page.json").read_text())
 bad_event = {**page["events"][0], "payload": {"text": "wrong acceptance shape"}}
 assert not validator("Event").is_valid(bad_event)
+delta = {**page["events"][0], "kind": "output_delta", "payload": {"text": "partial repl"}}
+assert validator("Event").is_valid(delta)
+assert not validator("Event").is_valid({**delta, "payload": {"text": "x", "final": True}})
 
 conversation = json.loads((ROOT / "contracts/examples/conversation-created.json").read_text())["conversation"]
 create = {key: conversation[key] for key in ("conversation_id", "project_id", "provider",
@@ -92,4 +95,4 @@ for invalid in (
     assert not validator("ConversationCreate").is_valid(invalid)
 
 schema_count = len(spec["components"]["schemas"])
-print(f"PASS: contract structure/references, {schema_count} JSON schemas, {len(manifest)} wire examples, and 8 invalid-payload checks")
+print(f"PASS: contract structure/references, {schema_count} JSON schemas, {len(manifest)} wire examples, and 9 invalid-payload checks")

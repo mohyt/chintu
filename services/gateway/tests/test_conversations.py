@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
+from chintu_adapters import AdapterEvent
 from chintu_gateway import Settings, create_app
+from chintu_gateway.store import result
 from starlette.testclient import TestClient
 
 from test_gateway import CountingAdapter
@@ -184,6 +186,25 @@ class ConversationTests(unittest.TestCase):
         self.call("GET", "/api/v1/tools?project_id=fixture&execution_profile=desktop", 501)
         self.call("GET", "/api/v1/tools?project_id=fixture&execution_profile=inspect&working_directory=..", 422)
         self.call("GET", "/api/v1/tools?project_id=other&execution_profile=inspect", 404)
+
+    def test_streamed_reply_deltas_are_stored_in_order_for_the_chat(self):
+        async def streaming(command):
+            yield AdapterEvent("started", {}, uid())
+            yield AdapterEvent("progress", {"text": "Reading: notes.md"})
+            for piece in ("The release ", "went out ", "on Tuesday."):
+                yield AdapterEvent("output_delta", {"text": piece})
+            yield AdapterEvent("output", {"text": "The release went out on Tuesday."})
+            yield AdapterEvent("succeeded", result("The release went out on Tuesday."))
+
+        self.adapter.run = streaming
+        value, _ = self.create()
+        task = self.finished(self.turn(value["conversation_id"], "When did we ship?")["task"]["task_id"])
+        page = self.call("GET", f"/api/v1/events?task_id={task['task_id']}", schema="EventsPage")
+        kinds = [event["kind"] for event in page["events"]]
+        self.assertEqual(kinds, ["task_accepted", "started", "started", "progress", "output_delta", "output_delta",
+                                 "output_delta", "output", "completed"])
+        streamed = "".join(event["payload"]["text"] for event in page["events"] if event["kind"] == "output_delta")
+        self.assertEqual(streamed, "The release went out on Tuesday.")
 
     def test_quarantine_covers_folders_inside_and_around_a_blocked_one(self):
         store = self.app.state.store

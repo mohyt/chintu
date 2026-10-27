@@ -22,6 +22,7 @@ import ai.chintu.core.EventCursor
 import ai.chintu.core.SubmissionGuard
 import ai.chintu.core.VoiceCommand
 import ai.chintu.core.DestinationMatcher
+import ai.chintu.core.ChatTranscript
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
@@ -140,9 +141,11 @@ class MainActivity : Activity() {
     private lateinit var chatSubtitle: TextView
     private lateinit var chatMessages: LinearLayout
     private lateinit var chatScroll: ScrollView
-    /** Turns of the current conversation, oldest first, and the latest progress line of each running turn. */
+    /** Turns of the current conversation, oldest first, and each turn's streamed output (tool steps and reply text). */
     private var chatTurns = mutableListOf<JSONObject>()
-    private val chatProgress = mutableMapOf<String, String>()
+    private val chatEvents = mutableMapOf<String, ChatTranscript>()
+    /** Finished turns whose full output was fetched on request. */
+    private val chatExpanded = mutableSetOf<String>()
     private var overlay: android.app.Dialog? = null
     private var sheet: android.app.Dialog? = null
     private var projects = emptyList<JSONObject>()
@@ -1230,7 +1233,7 @@ class MainActivity : Activity() {
         handler.postDelayed({ autoDiscover() }, 300)
         store = candidate; selectedComputer = target; guard = SubmissionGuard(store); cursor = EventCursor(store.cursor)
         cursor.reconnect(); connected = true; projects = catalog.projects; capabilities = catalog.providers; tasks = emptyList()
-        chatTurns.clear(); chatProgress.clear()
+        chatTurns.clear(); chatEvents.clear(); chatExpanded.clear()
         setTranscript(store.draft); reviewPending = store.draft.isNotBlank()
         lastReply = ""; output.text = "Connected to ${target.name}. Ready for your next instruction."
         rebuildingSelections = true
@@ -1524,10 +1527,23 @@ class MainActivity : Activity() {
         getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(android.content.ClipData.newPlainText("Chintu", text))
         showStatus("Copied.")
     }
-    /** WhatsApp-style thread: your words on the right, the agent's replies on the left. Tap a reply to hear it. */
+    private val activeStates = setOf("queued", "running", "waiting_for_input", "cancelling")
+    /** One quiet line per tool step, so the whole run is visible without crowding the replies. */
+    private fun stepLine(text: String) {
+        chatMessages.addView(TextView(this).apply {
+            this.text = "▸  $text"; textSize = 12f; setTextColor(muted); maxLines = 3; typeface = Typeface.MONOSPACE
+            ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(10), dp(4), dp(10), 0)
+        }, LinearLayout.LayoutParams(-1, -2))
+    }
+    /**
+     * WhatsApp-style thread: your words on the right; on the left everything the agent does, streamed as it happens
+     * (tool steps as quiet lines, reply text growing in its bubble). Tap a reply to hear it, hold it to copy.
+     */
     private fun renderChat() {
         if (!::chatMessages.isInitialized) return
         updateChatHeader()
+        // Follow new output only while the owner is at the bottom; never pull them away from what they are reading.
+        val follow = chatMessages.height == 0 || chatScroll.scrollY + chatScroll.height >= chatMessages.height - dp(96)
         chatMessages.removeAllViews()
         if (chatTurns.isEmpty()) {
             label(chatMessages, "Type below or tap the mic. Whatever you say by voice joins this chat too, and the agent remembers " +
@@ -1537,24 +1553,68 @@ class MainActivity : Activity() {
         chatTurns.forEach { turn ->
             val id = turn.getString("task_id"); val state = turn.getString("state"); val result = turn.optJSONObject("result")
             bubble(turn.optString("instruction"), mine = true, note = timeAgo(stamp(turn.optString("created_at"))))
-            val active = state in setOf("queued", "running", "waiting_for_input", "cancelling")
-            val reply = when {
-                result != null -> result.optString("summary").ifBlank { "Finished: $state." }
-                state == "queued" -> "Queued, waiting its turn…"
-                state == "cancelling" -> "Stopping…"
-                else -> chatProgress[id] ?: "Working on it…"
+            val active = state in activeStates
+            val segments = chatEvents[id]?.segments().orEmpty()
+            var texts = 0
+            segments.forEach { segment ->
+                if (segment.kind() == ChatTranscript.Kind.STEP) stepLine(segment.text())
+                else {
+                    texts++
+                    val view = bubble(segment.text() + if (segment.open()) " ▍" else "", mine = false, note = null)
+                    view.setOnClickListener { speak(segment.text()) }
+                    view.setOnLongClickListener { copy(segment.text()); true }
+                }
             }
-            val stop = if (active && state != "cancelling") TextView(this).apply {
-                text = "Stop"; textSize = 13f; setTextColor(accent); setPadding(dp(8), dp(6), dp(8), dp(6)); minHeight = dp(36)
-                contentDescription = "Stop this request on the computer"; setOnClickListener { cancelTurn(id) }
-            } else null
-            val note = if (active) null else timeAgo(stamp(turn.optString("updated_at"))) + if (state == "succeeded") "" else " · $state"
-            val view = bubble(reply, mine = false, note = note, alert = state in setOf("failed", "interrupted"), pending = active, extra = stop)
-            val spoken = result?.optString("speech_text").orEmpty().ifBlank { reply }
-            view.setOnClickListener { speak(spoken) }
-            view.setOnLongClickListener { copy(reply); true }
+            val summary = result?.optString("summary").orEmpty()
+            // The recorded result is its own reply when nothing streamed, or when the run did not succeed.
+            if (!active && summary.isNotBlank() && (texts == 0 || state != "succeeded")) {
+                val view = bubble(summary, mine = false, note = null, alert = state in setOf("failed", "interrupted"))
+                val spoken = result?.optString("speech_text").orEmpty().ifBlank { summary }
+                view.setOnClickListener { speak(spoken) }
+                view.setOnLongClickListener { copy(summary); true }
+            } else if (active && segments.isEmpty()) {
+                bubble(when (state) { "queued" -> "Queued, waiting its turn…"; "cancelling" -> "Stopping…"; else -> "Working on it…" },
+                    mine = false, note = null, pending = true)
+            }
+            val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            footer.addView(TextView(this).apply {
+                text = if (active) (if (state == "cancelling") "stopping…" else "● live") else
+                    timeAgo(stamp(turn.optString("updated_at"))) + if (state == "succeeded") "" else " · $state"
+                textSize = 11f; setTextColor(if (active) accent else muted); setPadding(dp(6), dp(2), dp(6), 0)
+            })
+            fun link(label: String, description: String, action: () -> Unit) = footer.addView(TextView(this).apply {
+                text = label; textSize = 13f; setTextColor(accent); setPadding(dp(10), dp(6), dp(10), dp(6)); minHeight = dp(36)
+                gravity = Gravity.CENTER_VERTICAL; contentDescription = description; setOnClickListener { action() }
+            })
+            if (active && state != "cancelling") link("Stop", "Stop this request on the computer") { cancelTurn(id) }
+            if (!active && segments.isEmpty() && id !in chatExpanded) link("Show full output", "Show every step and the full reply") { loadTurnEvents(id) }
+            chatMessages.addView(footer, LinearLayout.LayoutParams(-1, -2))
         }
-        chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+        if (follow) chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+    /** A turn's text events (steps, streamed and finished replies), oldest first and bounded. Off the main thread. */
+    private fun fetchTurnEvents(client: GatewayApi, id: String): List<JSONObject> {
+        val found = mutableListOf<JSONObject>(); var after = 0L
+        do {
+            val page = client.call("GET", "/api/v1/events?task_id=$id&after=$after&limit=100"); val array = page.getJSONArray("events")
+            for (i in 0 until array.length()) found.add(array.getJSONObject(i))
+            val next = page.getLong("next_cursor")
+            val more = page.getBoolean("has_more") && next > after
+            after = next
+        } while (more && found.size < 3000)
+        return found
+    }
+    private fun addTurnEvents(id: String, events: List<JSONObject>) {
+        val transcript = chatEvents.getOrPut(id) { ChatTranscript() }
+        events.forEach { transcript.add(it.getLong("event_id"), it.getString("kind"), it.getJSONObject("payload").optString("text")) }
+    }
+    private fun loadTurnEvents(id: String) {
+        val origin = store
+        chatExpanded.add(id)
+        background("Loading the full output…") { ticket ->
+            val events = fetchTurnEvents(api(origin), id)
+            ui(ticket) { addTurnEvents(id, events); renderChat() }
+        }
     }
     /** Reloads the current conversation's turns from the computer (oldest first, newest 200 kept). */
     private fun loadChat() {
@@ -1579,9 +1639,14 @@ class MainActivity : Activity() {
                 check(cursorValue == null || seen.add(cursorValue)) { "The computer repeated a chat cursor." }
                 next = cursorValue
             } while (next != null && turns.size < 1000)
+            val kept = turns.takeLast(200)
+            val backfill = (kept.filter { it.getString("state") in activeStates } + listOfNotNull(kept.lastOrNull()))
+                .map { it.getString("task_id") }.distinct().takeLast(5).associateWith { fetchTurnEvents(client, it) }
             ui(ticket) {
                 if (origin.conversation?.optString("conversation_id") == id) {
-                    origin.conversation = chatFromServer(fresh); chatTurns = turns.takeLast(200).toMutableList(); renderChat()
+                    origin.conversation = chatFromServer(fresh); chatTurns = kept.toMutableList()
+                    backfill.forEach { (task, events) -> addTurnEvents(task, events); chatExpanded.add(task) }
+                    renderChat()
                 }
             }
         }
@@ -1649,7 +1714,7 @@ class MainActivity : Activity() {
         }
     }
     private fun selectChat(value: JSONObject) {
-        store.conversation = chatFromServer(value); chatTurns.clear(); chatProgress.clear()
+        store.conversation = chatFromServer(value); chatTurns.clear(); chatEvents.clear(); chatExpanded.clear()
         applyChoice(value)
         if (chatOpen && sheet?.isShowing == true) { renderChat(); loadChat() } else showConversation()
     }
@@ -1733,7 +1798,7 @@ class MainActivity : Activity() {
     }
     private fun startChat(choice: Triple<String, String, String>, folder: String, announce: Boolean) {
         val origin = store
-        origin.conversation = freshChat(choice, folder); chatTurns.clear(); chatProgress.clear(); renderChat()
+        origin.conversation = freshChat(choice, folder); chatTurns.clear(); chatEvents.clear(); chatExpanded.clear(); renderChat()
         background("Starting a new chat…") { ticket ->
             val chat = ensureConversation(origin, choice)
             ui(ticket) {
@@ -1869,7 +1934,7 @@ class MainActivity : Activity() {
                 if (!reviewPending && !chatOpen) dismissSheet()
                 activityStore().record(accepted); updateActivityBadge()
                 origin.conversation?.let { chat -> if (chat.text("title").isEmpty()) { chat.put("title", shortTitle(text)); origin.conversation = chat } }
-                if (chatTurns.any { it.text("conversation_id") != accepted.text("conversation_id") }) { chatTurns.clear(); chatProgress.clear() }
+                if (chatTurns.any { it.text("conversation_id") != accepted.text("conversation_id") }) { chatTurns.clear(); chatEvents.clear(); chatExpanded.clear() }
                 chatTurns.removeAll { it.getString("task_id") == accepted.getString("task_id") }; chatTurns.add(accepted); renderChat()
                 showStatus(if (quiet.isChecked) "Queued on $destination. The result will appear in Activity."
                     else "Instruction accepted by $destination${if (response.getBoolean("replayed")) " (existing task)" else ""}.")
@@ -1914,18 +1979,18 @@ class MainActivity : Activity() {
         background { ticket ->
             try {
                 val client = api(origin)
-                val page = client.call("GET", "/api/v1/events?after=${eventCursor.get()}&limit=20")
+                val page = client.call("GET", "/api/v1/events?after=${eventCursor.get()}&limit=100")
                 val events = page.getJSONArray("events"); val messages = mutableListOf<String>(); val live = eventCursor.canSpeak(); var changed = false
                 val progressLines = mutableListOf<Pair<String, String>>(); var finished = false
                 val finishedIds = mutableSetOf<String>()
-                val chatChanged = linkedSetOf<String>(); val chatLines = mutableMapOf<String, String>()
+                val chatChanged = linkedSetOf<String>(); val chatLines = mutableListOf<JSONObject>()
                 for (i in 0 until events.length()) {
                     val event = events.getJSONObject(i)
                     if (!eventCursor.accept(event.getLong("event_id"))) continue
                     if (event.getString("task_id") in watched) {
-                        chatChanged.add(event.getString("task_id"))
-                        if (event.getString("kind") in listOf("progress", "output"))
-                            event.getJSONObject("payload").optString("text").takeIf { it.isNotBlank() }?.let { chatLines[event.getString("task_id")] = it }
+                        // Text streams straight into the chat; only state changes need a fresh snapshot.
+                        if (event.getString("kind") in listOf("progress", "output", "output_delta")) chatLines.add(event)
+                        else chatChanged.add(event.getString("task_id"))
                     }
                     if (event.getString("kind") in listOf("completed", "failed", "cancelled", "interrupted")) finishedIds.add(event.getString("task_id"))
                     if (event.getString("task_id") == selectedId) {
@@ -1948,11 +2013,13 @@ class MainActivity : Activity() {
                 ui(ticket) {
                     if (finishedIds.isNotEmpty()) { updateActivityBadge(); if (sheet?.isShowing == true && activityList.parent != null) renderActivity() }
                     if (chatSnapshots.isNotEmpty() || chatLines.isNotEmpty()) {
-                        chatLines.forEach { (id, line) -> chatProgress[id] = conversational("progress", line)?.replaceFirstChar { it.uppercase() } ?: line.take(140) }
+                        chatLines.forEach { event ->
+                            chatEvents.getOrPut(event.getString("task_id")) { ChatTranscript() }.add(event.getLong("event_id"),
+                                event.getString("kind"), event.getJSONObject("payload").optString("text"))
+                        }
                         chatSnapshots.forEach { fresh ->
                             val index = chatTurns.indexOfFirst { it.getString("task_id") == fresh.getString("task_id") }
                             if (index >= 0) chatTurns[index] = fresh
-                            if (fresh.getString("state") in setOf("succeeded", "failed", "cancelled", "interrupted")) chatProgress.remove(fresh.getString("task_id"))
                         }
                         renderChat()
                     }
@@ -1968,7 +2035,9 @@ class MainActivity : Activity() {
                         if (foreground && polling && speakNew && speakingAllowed())
                             messages.lastOrNull()?.let { pendingReply = selectedId!! to it }
                     }
-                    if (foreground && polling) handler.postDelayed(poll, if (page.getBoolean("has_more")) 100 else 3000)
+                    // Poll every second while a chat turn runs in front of the owner, so its output streams.
+                    val streaming = chatOpen && chatTurns.any { it.getString("state") in activeStates }
+                    if (foreground && polling) handler.postDelayed(poll, if (page.getBoolean("has_more")) 100 else if (streaming) 1000 else 3000)
                 }
             } catch (e: ApiFailure) {
                 if (e.status == 410 && e.code == "cursor_expired") {

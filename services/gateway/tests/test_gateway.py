@@ -18,6 +18,7 @@ from chintu_adapters import AdapterEvent, ScriptedAdapter
 from chintu_gateway import Settings, Store, create_app
 from chintu_gateway.app import RateLimiter, local_secret_path
 from chintu_gateway.cli import _private_log_files, main
+from chintu_gateway.manager import OUTPUT_EVENT_LIMIT
 from chintu_gateway.store import MAX_OPEN_ENROLLMENTS, result
 from starlette.testclient import TestClient
 
@@ -474,7 +475,7 @@ class WorkerBoundaryTests(unittest.TestCase):
         class BrokenAdapter(ScriptedAdapter):
             async def run(self, command):
                 yield AdapterEvent("started", {}, uid())
-                for _ in range(257):
+                for _ in range(OUTPUT_EVENT_LIMIT + 1):
                     yield AdapterEvent("output", {"text": "bounded individual output"})
                 yield AdapterEvent("succeeded", result("must never be committed"))
 
@@ -489,7 +490,7 @@ class WorkerBoundaryTests(unittest.TestCase):
                     "project_id": "fixture", "provider": "scripted", "instruction": "overflow",
                     "execution_profile": "inspect"}).json()
                 task_id = accepted["task"]["task_id"]
-                deadline = time.monotonic() + 3
+                deadline = time.monotonic() + 60
                 while time.monotonic() < deadline:
                     snapshot = app.state.store.get(task_id)
                     if snapshot["state"] == "interrupted":

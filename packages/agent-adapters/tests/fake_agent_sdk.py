@@ -66,6 +66,17 @@ class UserMessage:
 
 
 @dataclass
+class StreamEvent:
+    uuid: str
+    session_id: str
+    event: dict
+    parent_tool_use_id: str | None = None
+
+
+STREAMED = "Streaming reply, sentence by sentence. " * 30
+
+
+@dataclass
 class ResultMessage:
     subtype: str
     is_error: bool
@@ -167,6 +178,18 @@ class ClaudeSDKClient:
             return
         if text == "[fail]":
             yield ResultMessage("error_during_execution", True, session, None)
+            return
+        if text == "[stream]" and self.options.kwargs.get("include_partial_messages"):
+            # Raw API stream events: only top-level text deltas belong to the reply.
+            yield StreamEvent("s0", session, {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}})
+            yield StreamEvent("sub", session, {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "SUBAGENT"}}, "t9")
+            yield StreamEvent("json", session, {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "{"}})
+            for start in range(0, len(STREAMED), 10):
+                yield StreamEvent(f"d{start}", session, {"type": "content_block_delta", "index": 0,
+                                                         "delta": {"type": "text_delta", "text": STREAMED[start:start + 10]}})
+            yield StreamEvent("stop", session, {"type": "content_block_stop", "index": 0})
+            yield AssistantMessage([TextBlock(STREAMED)], session_id=session)
+            yield ResultMessage("success", False, session, STREAMED)
             return
         reply = "Fake reply: " + text
         yield AssistantMessage([TextBlock("Looking at the workspace first.")], session_id=session)
