@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import UUID
 
 from chintu_adapters import AdapterCapabilities, RuntimeEvidence
+from chintu_adapters.types import tool_catalog
 
 import logging
 
@@ -25,6 +26,7 @@ from .manager import Manager
 from .store import Store
 from .systems import TailscaleDiscovery
 from . import pairing_page
+from . import workspace as workspaces
 
 
 @dataclass(frozen=True)
@@ -414,6 +416,80 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     @api.get("/tasks/{task_id}")
     async def get_task(request: Request, task_id: str):
         return store.get(identifier(task_id), request.state.client_id)
+
+    # --- Conversations: voice and chat share one agent session and working directory per conversation. ---
+    @api.post("/conversations")
+    async def create_conversation(request: Request):
+        value = await body(request, "ConversationCreate")
+        conversation, replayed = store.create_conversation(request.state.client_id, value, validate_capability)
+        result = contract.validate("ConversationCreated", {"conversation": conversation, "replayed": replayed})
+        return JSONResponse(result, 200 if replayed else 201)
+
+    @api.get("/conversations")
+    async def list_conversations(request: Request):
+        limit = integer(request.query_params.get("limit", "20"), 1, 100)
+        cursor = request.query_params.get("cursor")
+        if cursor is not None and len(cursor) > 512:
+            raise ApiError(422, "invalid_request", "Conversation cursor is too long.")
+        return contract.validate("ConversationsPage", store.conversations_page(request.state.client_id, limit, cursor))
+
+    @api.get("/conversations/{conversation_id}")
+    async def get_conversation(request: Request, conversation_id: str):
+        return contract.validate("Conversation", store.conversation(request.state.client_id, identifier(conversation_id)))
+
+    @api.patch("/conversations/{conversation_id}")
+    async def rename_conversation(request: Request, conversation_id: str):
+        conversation_id = identifier(conversation_id)
+        value = await body(request, "ConversationUpdate")
+        if not value["title"].strip():
+            raise ApiError(422, "invalid_request", "A conversation title cannot be blank.")
+        return contract.validate("Conversation", store.rename_conversation(
+            request.state.client_id, conversation_id, value["title"]))
+
+    @api.delete("/conversations/{conversation_id}", status_code=204)
+    async def archive_conversation(request: Request, conversation_id: str):
+        store.archive_conversation(request.state.client_id, identifier(conversation_id))
+        return Response(status_code=204)
+
+    @api.get("/conversations/{conversation_id}/tasks")
+    async def conversation_tasks(request: Request, conversation_id: str):
+        conversation_id = identifier(conversation_id)
+        store.conversation(request.state.client_id, conversation_id)
+        limit = integer(request.query_params.get("limit", "20"), 1, 100)
+        cursor = request.query_params.get("cursor")
+        if cursor is not None and len(cursor) > 512:
+            raise ApiError(422, "invalid_request", "Task cursor is too long.")
+        return store.tasks_page(limit, cursor, request.state.client_id, conversation_id)
+
+    def registered_root(project_id):
+        if not isinstance(project_id, str) or project_id not in settings.projects:
+            raise ApiError(404, "not_found", "Registered project not found.")
+        return store.project_paths.get(project_id, "project:" + project_id)
+
+    @api.get("/directories")
+    async def directories(request: Request):
+        project_id = request.query_params.get("project_id")
+        root = registered_root(project_id)
+        found = workspaces.listing(root, request.query_params.get("path", ""))
+        return contract.validate("Directories", {"project_id": project_id, **found})
+
+    @api.get("/tools")
+    async def tools(request: Request):
+        project_id, profile = request.query_params.get("project_id"), request.query_params.get("execution_profile")
+        root = registered_root(project_id)
+        if adapter is None:
+            raise unavailable()
+        capability = adapter.capabilities()
+        if (not capability.available or profile not in capability.execution_profiles
+                or profile not in settings.projects[project_id]["execution_profiles"]):
+            raise unavailable()
+        _, path = workspaces.resolve(root, request.query_params.get("working_directory", ""))
+        if hasattr(adapter, "tools"):
+            catalog = await adapter.tools(str(path), profile)
+        else:
+            catalog = tool_catalog("static", reason="This agent does not report its tools.")
+        return contract.validate("ToolCatalog", {"provider": capability.provider, "project_id": project_id,
+                                                 "execution_profile": profile, **catalog})
 
     @api.get("/events")
     async def events(request: Request):

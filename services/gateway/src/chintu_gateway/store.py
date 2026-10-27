@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .errors import ApiError
+from . import workspace as workspaces
 
 
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
@@ -104,6 +105,17 @@ class Store:
                 # Tasks are private to the pairing client; rows from before this column have no owner
                 # and stay invisible to every phone (the worker and operator tools still see them).
                 db.execute("ALTER TABLE tasks ADD COLUMN client_id TEXT")
+            if "conversation_id" not in task_columns:
+                db.execute("ALTER TABLE tasks ADD COLUMN conversation_id TEXT")
+            db.executescript("""
+                CREATE INDEX IF NOT EXISTS task_conversation ON tasks(conversation_id);
+                CREATE TABLE IF NOT EXISTS conversations(
+                    conversation_id TEXT PRIMARY KEY, client_id TEXT NOT NULL, project_id TEXT NOT NULL,
+                    provider TEXT NOT NULL, execution_profile TEXT NOT NULL, working_directory TEXT NOT NULL,
+                    path TEXT NOT NULL, title TEXT, provider_session_id TEXT, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
+                CREATE INDEX IF NOT EXISTS conversation_activity ON conversations(client_id, updated_at);
+            """)
 
     @contextmanager
     def connection(self):
@@ -286,10 +298,18 @@ class Store:
                     self._workspace(db, snapshot["task_id"], snapshot["project_id"]),
                     snapshot["attempt_id"], now()))
 
-    def _workspace_check(self, db, project_id):
-        path = self.project_paths.get(project_id, "project:" + project_id)
-        if db.execute("SELECT 1 FROM workspace_blocks WHERE path=? AND cleared_at IS NULL", (path,)).fetchone():
+    def _blocked(self, db, path):
+        """A quarantined path blocks every working directory that contains it or lies inside it."""
+        return any(workspaces.overlaps(row["path"], path)
+                   for row in db.execute("SELECT path FROM workspace_blocks WHERE cleared_at IS NULL"))
+
+    def _workspace_check(self, db, path):
+        if self._blocked(db, path):
             raise ApiError(409, "invalid_state", "Workspace is awaiting local execution reconciliation.")
+
+    def _within_project(self, path, project_id):
+        root = self.project_paths.get(project_id, "project:" + project_id)
+        return path == root or (not root.startswith("project:") and workspaces.inside(root, path))
 
     def _replay(self, db, client_id, operation, key, content):
         row = db.execute("SELECT digest,task_id FROM operations WHERE client_id=? AND operation=? AND key=?",
@@ -316,18 +336,22 @@ class Store:
             if existing is not None:
                 return existing, True
             validate_capability(body)
-            self._workspace_check(db, body["project_id"])
+            session, path = None, self.project_paths.get(body["project_id"], "project:" + body["project_id"])
+            if body["conversation_id"] is not None:
+                conversation = self._turn_conversation(db, client_id, body)
+                session, path = conversation["provider_session_id"], conversation["path"]
+            self._workspace_check(db, path)
             self._queue_check(db)
             stamp, task_id = now(), str(uuid4())
             snapshot = {k: body[k] for k in ("project_id", "provider", "instruction",
                          "execution_profile", "conversation_id", "title")}
-            snapshot.update(task_id=task_id, attempt_id=None, provider_session_id=None,
+            snapshot.update(task_id=task_id, attempt_id=None, provider_session_id=session,
                             state="queued", task_version=0, created_at=stamp, updated_at=stamp,
                             result=None, pending_input=None)
-            db.execute("INSERT INTO tasks(task_id,snapshot,state,project_id,instruction,client_id) VALUES (?,?,?,?,?,?)",
-                       (task_id, encode(snapshot), "queued", body["project_id"], body["instruction"], client_id))
-            db.execute("INSERT INTO task_workspaces VALUES (?,?)",
-                       (task_id, self.project_paths.get(body["project_id"], "project:" + body["project_id"])))
+            db.execute("INSERT INTO tasks(task_id,snapshot,state,project_id,instruction,client_id,conversation_id) "
+                       "VALUES (?,?,?,?,?,?,?)", (task_id, encode(snapshot), "queued", body["project_id"],
+                                                  body["instruction"], client_id, body["conversation_id"]))
+            db.execute("INSERT INTO task_workspaces VALUES (?,?)", (task_id, path))
             self._event(db, snapshot, "task_accepted", {"state": "queued"})
             self._record(db, client_id, "submit", body["submission_key"], body, task_id)
         return snapshot, False
@@ -353,10 +377,10 @@ class Store:
                     raise ApiError(501, "unsupported_capability", "Task provider is not currently enabled.")
                 if snapshot["execution_profile"] not in capabilities.execution_profiles:
                     raise ApiError(501, "unsupported_capability", "Task execution profile is not currently enabled.")
-                if self._workspace(db, task_id, snapshot["project_id"]) != self.project_paths.get(
-                        snapshot["project_id"], "project:" + snapshot["project_id"]):
+                path = self._workspace(db, task_id, snapshot["project_id"])
+                if not self._within_project(path, snapshot["project_id"]):
                     raise ApiError(409, "invalid_state", "Registered workspace changed after task acceptance.")
-                self._workspace_check(db, snapshot["project_id"])
+                self._workspace_check(db, path)
                 self._queue_check(db)
                 snapshot.update(state="queued", result=None, pending_input=None, attempt_id=None)
                 db.execute("UPDATE tasks SET instruction=? WHERE task_id=?", (body["instruction"], task_id))
@@ -376,6 +400,114 @@ class Store:
             self._record(db, client_id, operation, body["message_id"], content, task_id)
         return snapshot, False, signal
 
+    # --- Conversations: one agent session and working directory shared by voice and chat turns. ---
+    @staticmethod
+    def _title(text, limit=60):
+        line = " ".join(str(text).split())
+        return line if len(line) <= limit else line[:limit - 1].rstrip() + "…"
+
+    def _conversation_row(self, db, conversation_id, client_id):
+        row = db.execute("SELECT * FROM conversations WHERE conversation_id=?", (conversation_id,)).fetchone()
+        if row is None or row["client_id"] != client_id:
+            raise ApiError(404, "not_found", "Conversation not found.")
+        return row
+
+    def _conversation_view(self, db, row):
+        counts = db.execute("SELECT count(*) AS turns, coalesce(sum(state NOT IN ('succeeded','failed','cancelled',"
+                            "'interrupted')), 0) AS open FROM tasks WHERE conversation_id=?",
+                            (row["conversation_id"],)).fetchone()
+        last = db.execute("SELECT task_id, snapshot FROM tasks WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
+                          (row["conversation_id"],)).fetchone()
+        text = None
+        if last is not None:
+            snapshot = json.loads(last["snapshot"])
+            text = (snapshot["result"] or {}).get("summary") or snapshot["instruction"]
+            text = self._title(text, 300) or None
+        return {"conversation_id": row["conversation_id"], "title": row["title"], "project_id": row["project_id"],
+                "provider": row["provider"], "execution_profile": row["execution_profile"],
+                "working_directory": row["working_directory"], "provider_session_id": row["provider_session_id"],
+                "state": "working" if counts["open"] else "idle", "turns": counts["turns"],
+                "last_task_id": last["task_id"] if last is not None else None, "last_text": text,
+                "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+    def create_conversation(self, client_id, body, validate_capability):
+        """Idempotent on the client's conversation ID; the working directory is fixed for the session's life."""
+        body = {"working_directory": "", "title": None, **body}
+        validate_capability(body)
+        root = self.project_paths.get(body["project_id"], "project:" + body["project_id"])
+        relative, path = workspaces.resolve(root, body["working_directory"])
+        # The title is left out: the first turn or a rename may change it, and a retry must still replay.
+        fields = (body["project_id"], body["provider"], body["execution_profile"], relative)
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM conversations WHERE conversation_id=?", (body["conversation_id"],)).fetchone()
+            if row is not None:
+                if row["client_id"] != client_id or fields != (row["project_id"], row["provider"],
+                        row["execution_profile"], row["working_directory"]):
+                    raise ApiError(409, "idempotency_conflict", "Conversation ID was used with different content.")
+                return self._conversation_view(db, row), True
+            stamp = now()
+            db.execute("INSERT INTO conversations(conversation_id,client_id,project_id,provider,execution_profile,"
+                       "working_directory,path,title,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       (body["conversation_id"], client_id, *fields, path, body["title"], stamp, stamp))
+            return self._conversation_view(db, self._conversation_row(db, body["conversation_id"], client_id)), False
+
+    def _turn_conversation(self, db, client_id, body):
+        """The conversation a new task joins; an unknown ID starts one at the workspace root."""
+        row = db.execute("SELECT * FROM conversations WHERE conversation_id=?", (body["conversation_id"],)).fetchone()
+        if row is None:
+            stamp = now()
+            db.execute("INSERT INTO conversations(conversation_id,client_id,project_id,provider,execution_profile,"
+                       "working_directory,path,title,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       (body["conversation_id"], client_id, body["project_id"], body["provider"],
+                        body["execution_profile"], "", self.project_paths.get(body["project_id"], "project:" + body["project_id"]),
+                        body["title"] or self._title(body["instruction"]), stamp, stamp))
+        row = self._conversation_row(db, body["conversation_id"], client_id)
+        if row["archived"]:
+            raise ApiError(409, "invalid_state", "This conversation was archived; start a new one.")
+        if (row["project_id"], row["provider"], row["execution_profile"]) != (
+                body["project_id"], body["provider"], body["execution_profile"]):
+            raise ApiError(409, "invalid_state",
+                           "This conversation uses a different workspace, agent or permission profile; start a new one.")
+        path = row["path"]
+        if not self._within_project(path, row["project_id"]) or (not path.startswith("project:") and not Path(path).is_dir()):
+            raise ApiError(409, "invalid_state", "This conversation's working directory is no longer available; start a new one.")
+        db.execute("UPDATE conversations SET updated_at=?, title=coalesce(title, ?) WHERE conversation_id=?",
+                   (now(), self._title(body["instruction"]), row["conversation_id"]))
+        return dict(row)
+
+    def conversation(self, client_id, conversation_id):
+        with self.connection() as db:
+            return self._conversation_view(db, self._conversation_row(db, conversation_id, client_id))
+
+    def conversations_page(self, client_id, limit, cursor=None):
+        """Most recently active first; the cursor is the last row's ``updated_at|conversation_id``."""
+        query, args = "SELECT * FROM conversations WHERE client_id=? AND archived=0", [client_id]
+        if cursor is not None:
+            stamp, _, last = cursor.partition("|")
+            if not stamp or len(last) != 36:
+                raise ApiError(400, "invalid_cursor", "Invalid conversation cursor.")
+            query += " AND (updated_at<? OR (updated_at=? AND conversation_id<?))"
+            args += [stamp, stamp, last]
+        with self.connection() as db:
+            rows = db.execute(query + " ORDER BY updated_at DESC, conversation_id DESC LIMIT ?", (*args, limit + 1)).fetchall()
+            views = [self._conversation_view(db, row) for row in rows[:limit]]
+        return {"conversations": views,
+                "next_cursor": rows[limit - 1]["updated_at"] + "|" + rows[limit - 1]["conversation_id"]
+                if len(rows) > limit else None}
+
+    def rename_conversation(self, client_id, conversation_id, title):
+        with self.transaction() as db:
+            self._conversation_row(db, conversation_id, client_id)
+            db.execute("UPDATE conversations SET title=? WHERE conversation_id=?", (title.strip(), conversation_id))
+            return self._conversation_view(db, self._conversation_row(db, conversation_id, client_id))
+
+    def archive_conversation(self, client_id, conversation_id):
+        with self.transaction() as db:
+            row = self._conversation_row(db, conversation_id, client_id)
+            if self._conversation_view(db, row)["state"] == "working":
+                raise ApiError(409, "invalid_state", "This conversation still has work in progress.")
+            db.execute("UPDATE conversations SET archived=1 WHERE conversation_id=?", (conversation_id,))
+
     def claim(self, provider=None):
         with self.transaction() as db:
             # V1 globally serializes execution, also preventing workspace collisions.
@@ -388,7 +520,7 @@ class Store:
                 if provider is not None and snapshot["provider"] != provider:
                     continue
                 workspace = self._workspace(db, candidate["task_id"], candidate["project_id"])
-                if db.execute("SELECT 1 FROM workspace_blocks WHERE path=? AND cleared_at IS NULL", (workspace,)).fetchone():
+                if self._blocked(db, workspace):
                     continue
                 row = candidate
                 break
@@ -396,6 +528,12 @@ class Store:
                 return None
             snapshot = self._get(db, row["task_id"])
             snapshot.update(state="running", attempt_id=str(uuid4()))
+            if snapshot.get("conversation_id"):
+                # A turn resumes the conversation's latest session, which earlier turns may have set after submission.
+                found = db.execute("SELECT provider_session_id FROM conversations WHERE conversation_id=?",
+                                   (snapshot["conversation_id"],)).fetchone()
+                if found is not None and found["provider_session_id"]:
+                    snapshot["provider_session_id"] = found["provider_session_id"]
             self._event(db, snapshot, "started", {"state": "running"})
             return snapshot, row["instruction"]
 
@@ -427,6 +565,9 @@ class Store:
                 return False
             if session_id:
                 snapshot["provider_session_id"] = session_id
+            if snapshot.get("conversation_id") and (session_id or kind in TERMINAL):
+                db.execute("UPDATE conversations SET provider_session_id=coalesce(?, provider_session_id), updated_at=? "
+                           "WHERE conversation_id=?", (session_id, now(), snapshot["conversation_id"]))
             if kind == "started":
                 # Persist session identity with an event; claim already recorded running.
                 self._event(db, snapshot, "started", {"state": snapshot["state"]})
@@ -449,8 +590,8 @@ class Store:
                     partial_effects=snapshot["provider"] != "scripted"))
                 self._event(db, snapshot, "interrupted", snapshot["result"])
 
-    def tasks_page(self, limit, cursor=None, client_id=None):
-        """Tasks visible to ``client_id``; ``None`` is the operator's unscoped view."""
+    def tasks_page(self, limit, cursor=None, client_id=None, conversation_id=None):
+        """Tasks visible to ``client_id``, optionally one conversation's turns; ``None`` is the operator's unscoped view."""
         after = 0
         if cursor is not None:
             try:
@@ -463,6 +604,9 @@ class Store:
         if client_id is not None:
             query += " AND client_id=?"
             args.append(client_id)
+        if conversation_id is not None:
+            query += " AND conversation_id=?"
+            args.append(conversation_id)
         with self.connection() as db:
             rows = db.execute(query + " ORDER BY rowid LIMIT ?", (*args, limit + 1)).fetchall()
         return {"tasks": [json.loads(r["snapshot"]) for r in rows[:limit]],

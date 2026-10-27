@@ -287,6 +287,59 @@ class ClaudeAgentAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1].kind, "succeeded")
         self.assertEqual(fake.clients[-1].options.kwargs["permission_mode"], "bypassPermissions")
 
+    async def test_confined_profiles_list_their_fixed_tools_without_launching(self):
+        catalog = await self.adapter().tools(str(self.root), "inspect")
+        self.assertEqual(catalog["source"], "static")
+        self.assertEqual([tool["name"] for tool in catalog["tools"]], ["Read", "Glob", "Grep"])
+        self.assertEqual(catalog["tools"][0]["description"], "Read a file")
+        self.assertEqual(catalog["mcp_servers"], [])
+        self.assertIn("desktop profile", catalog["reason"])
+        develop = await self.adapter().tools(str(self.root), "develop")
+        self.assertIn("Bash", [tool["name"] for tool in develop["tools"]])
+        refused = await self.adapter().tools(str(self.root), "desktop")
+        self.assertEqual(refused["tools"], [])
+        self.assertIn("not enabled", refused["reason"])
+        self.assertEqual(fake.clients, [])
+
+    async def test_desktop_probe_lists_mcp_servers_tools_and_skills_then_caches(self):
+        adapter = self.adapter(profiles=("inspect", "desktop"))
+        catalog = await adapter.tools(str(self.root), "desktop")
+        self.assertEqual(catalog["source"], "probe")
+        self.assertEqual(len(fake.clients), 1)
+        probe = fake.clients[0]
+        self.assertTrue(probe.disconnected)
+        self.assertIsNone(probe.prompt)  # The probe never sends an instruction.
+        self.assertEqual(probe.options.kwargs["cwd"], str(self.root.resolve()))
+        names = [tool["name"] for tool in catalog["tools"]]
+        self.assertIn("Bash", names)
+        self.assertIn("mcp__github__get_issue", names)
+        self.assertIn("mcp__github__list_prs", names)
+        issue = next(tool for tool in catalog["tools"] if tool["name"] == "mcp__github__get_issue")
+        self.assertEqual((issue["kind"], issue["server"], issue["description"]), ("mcp", "github", "Get an issue"))
+        self.assertEqual(catalog["mcp_servers"], [{"name": "github", "status": "connected", "tools": 2},
+                                                  {"name": "calendar", "status": "needs-auth", "tools": 0},
+                                                  {"name": "odd", "status": "unknown", "tools": 0}])
+        self.assertEqual(catalog["skills"], [{"name": "review", "description": "Review the current diff"},
+                                             {"name": "compact", "description": None}])
+        again = await adapter.tools(str(self.root), "desktop")
+        self.assertEqual(again["source"], "cached")
+        self.assertEqual(len(fake.clients), 1)
+
+    async def test_failed_probe_falls_back_to_tools_seen_in_the_last_session(self):
+        adapter = self.adapter(profiles=("desktop",))
+        missing = str(self.root / "gone")
+        catalog = await adapter.tools(missing, "desktop")
+        self.assertEqual(catalog["source"], "static")
+        self.assertIn("built-in tools only", catalog["reason"])
+        self.assertIn("WebSearch", [tool["name"] for tool in catalog["tools"]])
+        await self.collect(adapter, self.command("hello", execution_profile="desktop"))
+        catalog = await adapter.tools(missing, "desktop")
+        self.assertEqual(catalog["source"], "cached")
+        self.assertEqual([(tool["name"], tool["kind"], tool["server"]) for tool in catalog["tools"]],
+                         [("Read", "builtin", None), ("Bash", "builtin", None),
+                          ("mcp__github__get_issue", "mcp", "github")])
+        self.assertIn("last session", catalog["reason"])
+
     async def test_permission_prompts_are_denied_and_noted(self):
         events = await self.collect(self.adapter(), self.command("[prompt]"))
         self.assertEqual(events[-1].kind, "succeeded")
