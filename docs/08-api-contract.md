@@ -32,6 +32,7 @@ All enrolled clients belong to the one configured owner and may access that owne
 | `GET /api/v1/tasks` | Page through current task snapshots | M4 |
 | `GET /api/v1/tasks/{task_id}` | Get current state, result, or pending input | M4 |
 | `GET /api/v1/events` | Fetch ordered events after a cursor | M4 |
+| `GET /api/v1/events/stream` | Push the same events as server-sent events while connected | Event push |
 | `POST /api/v1/tasks/{task_id}/messages` | Follow up in the same idle provider session | M4/M6 |
 | `POST /api/v1/tasks/{task_id}/cancel` | Request cancellation; return current state | M4/M6 |
 | `POST /api/v1/tasks/{task_id}/inputs/{request_id}/answer` | Answer an ordinary clarification | M6 |
@@ -47,6 +48,14 @@ All enrolled clients belong to the one configured owner and may access that owne
 | `GET /api/v1/tools` | Tools, MCP servers and skills under one profile | Conversations |
 
 M2's echo reply is explicitly a test reply. M4 can implement lifecycle behavior with a scripted adapter; real-provider capability claims require M3/M6 evidence. Unimplemented routes must fail explicitly rather than return invented success.
+
+## Event push
+
+`GET /api/v1/events/stream` is a server-sent-events (`text/event-stream`) view of `GET /api/v1/events` on the same private HTTPS origin, with the same protocol header and bearer token. It replays every event after `after` (or the `Last-Event-ID` header, which wins), then sends each new event the moment its transaction commits: `id: <event_id>`, `event: <kind>` and one `data:` line holding the unchanged `Event` envelope. The first frames are `retry: 2000` and `event: ready` with `{cursor, heartbeat_seconds, max_seconds}`; a `: keepalive` comment follows any 15 seconds without other frames. `task_id` narrows the stream to one task, as on the polling route.
+
+The gateway ends a stream after 15 minutes (`max_seconds` may ask for sooner), when the credential is revoked or expires (checked every heartbeat), or when the same client opens a fourth stream (its oldest closes). It refuses beyond 32 open streams with `503` (`retryable`). A cursor ahead of the server is `400 invalid_cursor` before any frame. Commits in the gateway process wake streams at once; a five-second check also catches events written by other processes. Shutdown gives open streams three seconds.
+
+The stream never replaces polling. Clients keep their persisted cursor, reconnect from the last event ID with jittered exponential backoff, treat `404` (an older gateway), `400` and `401` as "poll only", and keep polling at a long interval as a safety net while the stream is live. Tailscale Serve is a Go reverse proxy, which flushes `text/event-stream` responses immediately; that is expected, not yet measured through Serve on a device, and the heartbeat plus polling fallback cover a proxy that buffers.
 
 ## Conversations, working directories and tools
 
