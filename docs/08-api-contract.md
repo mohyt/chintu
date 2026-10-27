@@ -37,8 +37,26 @@ All enrolled clients belong to the one configured owner and may access that owne
 | `POST /api/v1/tasks/{task_id}/inputs/{request_id}/answer` | Answer an ordinary clarification | M6 |
 | `POST /api/v1/tasks/{task_id}/approvals/{request_id}/decision` | Allow/deny the exact recorded action | M6 |
 | `GET /api/v1/artifacts/{artifact_id}` | Retrieve an authorized result artifact | M6 |
+| `POST /api/v1/conversations` | Start a conversation pinned to a workspace folder, agent and profile (idempotent on `conversation_id`) | Conversations |
+| `GET /api/v1/conversations` | Page through conversations, most recently active first | Conversations |
+| `GET /api/v1/conversations/{conversation_id}` | Read one conversation | Conversations |
+| `PATCH /api/v1/conversations/{conversation_id}` | Rename a conversation | Conversations |
+| `DELETE /api/v1/conversations/{conversation_id}` | Archive an idle conversation | Conversations |
+| `GET /api/v1/conversations/{conversation_id}/tasks` | Turns of one conversation, oldest first | Conversations |
+| `GET /api/v1/directories` | Subfolders of a registered workspace, for choosing a working directory | Conversations |
+| `GET /api/v1/tools` | Tools, MCP servers and skills under one profile | Conversations |
 
 M2's echo reply is explicitly a test reply. M4 can implement lifecycle behavior with a scripted adapter; real-provider capability claims require M3/M6 evidence. Unimplemented routes must fail explicitly rather than return invented success.
+
+## Conversations, working directories and tools
+
+A conversation groups tasks that continue one agent session. `POST /api/v1/conversations` takes a client-generated `conversation_id`, `project_id`, `provider`, `execution_profile`, an optional `working_directory` relative to the registered workspace (empty for the root) and an optional `title`. It returns `201` with `{conversation, replayed: false}`; repeating it with the same workspace, agent, profile and folder returns `200` with `replayed: true` (the title is not compared, because the first turn or a rename may set it). Different content, or another client's ID, returns `409 idempotency_conflict`. A folder outside the workspace (absolute, `~`, `..`, or a symlink that leaves it) returns `422`; a missing folder or a file returns `404`.
+
+`POST /api/v1/tasks` with a `conversation_id` adds a turn. The task must use the conversation's project, provider and profile, or the gateway returns `409 invalid_state` ("start a new one"); the same applies to an archived conversation or one whose folder no longer exists. An unknown `conversation_id` creates a conversation at the workspace root, titled from the first instruction. Another client's conversation is `404`. The turn's snapshot carries the conversation's current `provider_session_id`, refreshed when the worker claims it.
+
+A `Conversation` reports `state` (`working` while any turn is unfinished), `turns`, `last_task_id`, a bounded `last_text` (latest result summary or instruction) and timestamps. Lists are ordered by `updated_at` and paged with an opaque cursor. `DELETE` archives only an idle conversation; archived conversations disappear from the list and accept no turns, while their tasks stay in history.
+
+`GET /api/v1/directories?project_id=…&path=…` lists visible subfolders (hidden folders and links leaving the workspace are omitted; links inside it report their target path), the folder's `parent` (`null` at the root), and `truncated` beyond 500 entries. `GET /api/v1/tools?project_id=…&execution_profile=…&working_directory=…` returns a `ToolCatalog`: `tools` (`builtin` or `mcp` with its `server`), `mcp_servers` with connection status and tool counts, `skills`, a `source` (`static` for fixed profile lists, `probe` when the agent was asked, `cached` for a recent probe or the last session's tool list) and a `reason` when the list is partial. The profile must be enabled for the project and runtime, otherwise `501`.
 
 ## Computer discovery and switching
 
