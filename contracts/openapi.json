@@ -5096,6 +5096,7 @@
               "started",
               "progress",
               "output",
+              "output_delta",
               "input_requested",
               "approval_requested",
               "approval_resolved",
@@ -5192,6 +5193,25 @@
               "properties": {
                 "kind": {
                   "const": "output"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/TextPayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "output_delta"
                 }
               },
               "required": [
@@ -5377,7 +5397,8 @@
               }
             }
           }
-        ]
+        ],
+        "description": "`output_delta` carries the next piece of the agent's reply while it is being written; concatenating a turn's deltas up to the next `output` or `progress` event gives that message. `output` still carries each finished message (bounded), so clients may ignore deltas."
       },
       "EventsPage": {
         "type": "object",

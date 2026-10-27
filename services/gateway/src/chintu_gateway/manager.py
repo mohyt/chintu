@@ -11,6 +11,10 @@ from .auth_env import assert_auth_environment
 from .store import TERMINAL, encode, result
 
 log = logging.getLogger("chintu.task")
+# Per-attempt budget for progress, output and streamed output deltas; a streamed reply needs many small events.
+OUTPUT_EVENT_LIMIT = 1500
+OUTPUT_BYTE_LIMIT = 512 * 1024
+TEXT_KINDS = {"progress", "output", "output_delta"}
 
 
 def _preview(text, limit=200):
@@ -115,6 +119,7 @@ class Manager:
                 if event.kind == "started":
                     log.info("task %s session %s", task_id[:8], (event.provider_session_id or "")[:36])
                 elif event.kind in {"progress", "output"}:
+                    # Deltas are too frequent for INFO; their text reaches the log only as the finished output.
                     log.info("task %s %s words=%d", task_id[:8], event.kind, _words(event.payload.get("text")))
                     log.debug("task %s %s: %s", task_id[:8], event.kind, _preview(event.payload.get("text")))
                 elif event.kind in TERMINAL:
@@ -124,12 +129,12 @@ class Manager:
                     if not event.provider_session_id or len(event.provider_session_id) > 512:
                         raise ValueError("Missing or oversized provider session")
                     payload = {}
-                elif event.kind in {"progress", "output"}:
+                elif event.kind in TEXT_KINDS:
                     self.contract.validate("TextPayload", event.payload)
                     payload = event.payload
                     output_bytes += len(encode(payload).encode())
                     output_events += 1
-                    if output_bytes > 128 * 1024 or output_events > 256:
+                    if output_bytes > OUTPUT_BYTE_LIMIT or output_events > OUTPUT_EVENT_LIMIT:
                         raise ValueError("Adapter output budget exceeded")
                 elif event.kind in TERMINAL:
                     self.contract.validate("TaskResult", event.payload)

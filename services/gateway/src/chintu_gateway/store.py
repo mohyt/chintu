@@ -571,7 +571,7 @@ class Store:
             if kind == "started":
                 # Persist session identity with an event; claim already recorded running.
                 self._event(db, snapshot, "started", {"state": snapshot["state"]})
-            elif kind in {"progress", "output"}:
+            elif kind in {"progress", "output", "output_delta"}:
                 self._event(db, snapshot, kind, payload)
             elif kind in TERMINAL:
                 snapshot.update(state=kind, result=payload, pending_input=None)
