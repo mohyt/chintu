@@ -132,7 +132,18 @@ class MainActivity : Activity() {
     private lateinit var provider: Spinner
     private lateinit var profile: Spinner
     private lateinit var task: Spinner
-    private val pages = mutableListOf<ScrollView>()
+    private val pages = mutableListOf<ViewGroup>()
+    /** The chat sheet is a conversation surface: voice keeps working while it is open, unlike forms. */
+    private var chatOpen = false
+    private lateinit var chatLabel: TextView
+    private lateinit var chatTitle: TextView
+    private lateinit var chatSubtitle: TextView
+    private lateinit var chatMessages: LinearLayout
+    private lateinit var chatScroll: ScrollView
+    /** Turns of the current conversation, oldest first, and the latest progress line of each running turn. */
+    private var chatTurns = mutableListOf<JSONObject>()
+    private val chatProgress = mutableMapOf<String, String>()
+    private var overlay: android.app.Dialog? = null
     private var sheet: android.app.Dialog? = null
     private var projects = emptyList<JSONObject>()
     private var capabilities = emptyList<JSONObject>()
@@ -214,6 +225,11 @@ class MainActivity : Activity() {
         setTextColor(if (primary) base else ink); background = shape(if (primary) accent else Color.rgb(38, 28, 61), 16)
         setPadding(dp(14), dp(10), dp(14), dp(10)); setOnClickListener { action() }
         parent.addView(this, ViewGroup.LayoutParams(-1, -2))
+    }
+    private fun pill(text: String, description: String, action: () -> Unit): Button = Button(this).apply {
+        this.text = text; isAllCaps = false; textSize = 13f; setTextColor(ink); background = shape(Color.rgb(38, 28, 61), 20)
+        setPadding(dp(12), 0, dp(12), 0); minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+        contentDescription = description; setOnClickListener { action() }
     }
     private fun field(parent: ViewGroup, hint: String, value: String = "", single: Boolean = false): EditText = EditText(this).apply {
         this.hint = hint; setText(value); setTextColor(ink); setHintTextColor(muted); textSize = 16f
@@ -323,6 +339,16 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER; minHeight = dp(48); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
             setOnClickListener { showPage(1) }; isFocusable = true; contentDescription = "Choose execution computer"
         }
+        // Voice and chat share one conversation: this row names it and starts a fresh one (a new agent session).
+        val chatRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        root.addView(chatRow, LinearLayout.LayoutParams(-1, dp(44)))
+        chatLabel = TextView(this).apply {
+            text = "💬  New chat  ›"; textSize = 13f; setTextColor(muted); gravity = Gravity.CENTER; maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END; isFocusable = true; minHeight = dp(44)
+            contentDescription = "Open the current chat"; setOnClickListener { showConversation() }
+        }
+        chatRow.addView(chatLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        chatRow.addView(pill("＋ New chat", "Start a new chat with a fresh session") { showNewChat() }, LinearLayout.LayoutParams(-2, dp(40)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         root.addView(controls, LinearLayout.LayoutParams(-1, dp(76)))
         val keyboard = Button(this).apply {
@@ -370,11 +396,27 @@ class MainActivity : Activity() {
         controls.addView(slot(audioButton), LinearLayout.LayoutParams(0, dp(72), 1f))
         gap(root, 8)
         // Configuration and conversation remain detached until a sheet is requested.
-        repeat(4) { pages.add(ScrollView(this).apply { isFillViewport = false; clipToPadding = false }) }
-        val conversation = column(pages[0], 20)
-        label(conversation, "Your words", 13f, muted); gap(conversation, 8)
-        transcript = field(conversation, "Speak or type an instruction…", state?.getString("transcript") ?: store.draft).apply {
-            minLines = 2; maxLines = 5; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        val chat = column().apply { setPadding(dp(16), 0, dp(16), dp(12)) }
+        pages.add(chat)
+        repeat(3) { pages.add(ScrollView(this).apply { isFillViewport = false; clipToPadding = false }) }
+        val chatHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        chat.addView(chatHeader, LinearLayout.LayoutParams(-1, -2))
+        val titles = column()
+        chatTitle = label(titles, "New chat", 17f, ink, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        chatSubtitle = label(titles, "", 12f, muted).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+        chatHeader.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
+        chatHeader.addView(pill("Tools", "Tools the agent can use") { showTools() }, LinearLayout.LayoutParams(-2, dp(40)))
+        chatHeader.addView(pill("Chats", "All chats on this computer") { showChats() }, LinearLayout.LayoutParams(-2, dp(40)).apply { marginStart = dp(6) })
+        chatHeader.addView(pill("＋", "Start a new chat") { showNewChat() }, LinearLayout.LayoutParams(-2, dp(40)).apply { marginStart = dp(6) })
+        output = label(chat, "", 13f, muted).apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(6), 0, dp(6)) }
+        chatScroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        chatMessages = column(chatScroll)
+        chat.addView(chatScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        val composer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM; setPadding(0, dp(8), 0, 0) }
+        chat.addView(composer, LinearLayout.LayoutParams(-1, -2))
+        transcript = field(composer, "Message", state?.getString("transcript") ?: store.draft).apply {
+            minLines = 1; maxLines = 5; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            background = shape(surface, 22); layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         }
         transcript.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -386,12 +428,17 @@ class MainActivity : Activity() {
                 reviewPending = !s.isNullOrBlank(); store.draft = s?.toString().orEmpty()
             }
         })
-        gap(conversation)
-        send = button(conversation, "Send instruction", true) { handleTypedSend() }; gap(conversation, 8)
-        button(conversation, "Read aloud") { speak(transcript.text.toString()) }; gap(conversation, 18)
-        output = label(conversation, "Replies will appear here.", 16f)
-        gap(conversation)
-        button(conversation, "Hear reply") { speak(lastReply) }
+        composer.addView(ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_btn_speak_now); imageTintList = android.content.res.ColorStateList.valueOf(ink)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER; background = shape(surface, 24); setPadding(dp(10), dp(10), dp(10), dp(10))
+            contentDescription = "Speak into this chat"
+            setOnClickListener { if (speech.isListening) speech.finish() else { reviewPending = false; autoRetries = 0; requestListen() } }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(6) })
+        send = Button(this).apply {
+            text = "➤"; textSize = 20f; setTextColor(base); background = shape(accent, 24); setPadding(0, 0, 0, 0)
+            minWidth = 0; minimumWidth = 0; contentDescription = "Send"; setOnClickListener { handleTypedSend() }
+        }
+        composer.addView(send, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(6) })
         val devices = column(pages[1], 20)
         val hosts = card(devices)
         label(hosts, "Your computers", 20f, ink, true)
@@ -437,6 +484,7 @@ class MainActivity : Activity() {
         val execution = card(settings)
         label(execution, "Workspace & agent", 20f, ink, true)
         runLabel = label(execution, "Choose these once for each computer.", 13f, muted)
+        label(execution, "A chat keeps the workspace, agent and permission profile it started with. Changing them here starts a new chat with your next message.", 12f, muted)
         project = spinner(execution); provider = spinner(execution); profile = spinner(execution)
         setOptions(project, listOf("Choose workspace")); setOptions(provider, listOf("Choose agent")); setOptions(profile, listOf("Choose permission profile"))
         val selection = object : AdapterView.OnItemSelectedListener {
@@ -468,7 +516,11 @@ class MainActivity : Activity() {
         setContentView(root)
     }
     private fun dismissSheet() { sheet?.dismiss() }
-    private fun showConversation() = openSheet(0, "Conversation")
+    private fun showConversation() {
+        if (chatOpen && sheet?.isShowing == true) { renderChat(); return }
+        openSheet(0, selectedComputer?.let { "Chat · ${it.name}" } ?: "Chat")
+        renderChat(); loadChat()
+    }
     private var noteEnteredAt = 0L
     private fun toggleNoteMode() {
         // Debounce: a second tap within 1.5 s of starting is almost always an accidental double tap.
@@ -634,15 +686,16 @@ class MainActivity : Activity() {
     }
     private fun openSheet(index: Int, title: String) {
         dismissSheet()
-        inDialog = true; waitingForRoute = false; handler.removeCallbacks(routeTimeout); handler.removeCallbacks(listenAgain)
-        if (::speech.isInitialized) speech.cancelRecognition()
+        chatOpen = index == 0
+        inDialog = !chatOpen; waitingForRoute = false; handler.removeCallbacks(routeTimeout); handler.removeCallbacks(listenAgain)
+        if (::speech.isInitialized && !chatOpen) speech.cancelRecognition()
         val page = pages[index]
         (page.parent as? ViewGroup)?.removeView(page)
         lateinit var dialog: android.app.Dialog
         dialog = bottomSheet(title, page, tall = true) {
             if (sheet === dialog) {
                 (page.parent as? ViewGroup)?.removeView(page)
-                sheet = null; inDialog = audioPicker?.isShowing == true; scheduleListening()
+                sheet = null; chatOpen = false; inDialog = audioPicker?.isShowing == true || overlay?.isShowing == true; scheduleListening()
             }
         }
         sheet = dialog
@@ -784,7 +837,7 @@ class MainActivity : Activity() {
         lateinit var dialog: android.app.Dialog
         dialog = bottomSheet("Audio device", body) {
             if (audioPicker === dialog) { audioPicker = null; audioPickerRefresh = null }
-            inDialog = sheet?.isShowing == true; scheduleListening()
+            inDialog = sheet?.isShowing == true && !chatOpen; scheduleListening()
         }
         fun updateList() {
             list.removeAllViews()
@@ -919,7 +972,8 @@ class MainActivity : Activity() {
             "pending=${guard.pending() != null} computer=${selectedComputer != null} connected=$connected autoSend=${autoSend.isChecked}")
         when (command.kind()) {
             VoiceCommand.Kind.SWITCH_DESTINATION -> switchByName(command.destinationName())
-            VoiceCommand.Kind.UNKNOWN_COMMAND -> respond("Try “Chintu, switch to” followed by a saved computer name.")
+            VoiceCommand.Kind.NEW_CONVERSATION -> startChatByVoice(command.folderName())
+            VoiceCommand.Kind.UNKNOWN_COMMAND -> respond("Try “Chintu, new chat”, or “Chintu, switch to” followed by a saved computer name.")
             VoiceCommand.Kind.TASK -> {
                 if (guard.pending() != null) {
                     reviewPending = true
@@ -996,7 +1050,10 @@ class MainActivity : Activity() {
         destinationLabel.setTextColor(if (connected) accent else muted)
         connectionLabel.text = if (connected) "Connected · all new instructions go here" else if (selectedComputer != null) "Saved · reconnect to verify availability" else "Tap to connect through Tailscale"
         connectionLabel.setTextColor(if (connected) accent else muted)
-        send.text = if (guard.pending() != null) "Retry on ${selectedComputer?.name ?: "computer"}" else "Send${selectedComputer?.let { " to ${it.name}" }.orEmpty()}"
+        val pending = guard.pending() != null
+        send.text = if (pending) "↻" else "➤"
+        send.contentDescription = if (pending) "Retry on ${selectedComputer?.name ?: "computer"}" else "Send${selectedComputer?.let { " to ${it.name}" }.orEmpty()}"
+        updateChatHeader()
     }
     private fun renderComputers() {
         computerList.removeAllViews()
@@ -1044,7 +1101,7 @@ class MainActivity : Activity() {
         body.addView(actions, LinearLayout.LayoutParams(-1, -2))
         val scroller = ScrollView(this).apply { isFillViewport = false; addView(body) }
         val dialog = bottomSheet(if (existing == null) "Add a computer" else existing.name, scroller) {
-            inDialog = sheet?.isShowing == true; scheduleListening()
+            inDialog = sheet?.isShowing == true && !chatOpen; scheduleListening()
         }
         if (existing != null) {
             gap(body, 14)
@@ -1173,6 +1230,7 @@ class MainActivity : Activity() {
         handler.postDelayed({ autoDiscover() }, 300)
         store = candidate; selectedComputer = target; guard = SubmissionGuard(store); cursor = EventCursor(store.cursor)
         cursor.reconnect(); connected = true; projects = catalog.projects; capabilities = catalog.providers; tasks = emptyList()
+        chatTurns.clear(); chatProgress.clear()
         setTranscript(store.draft); reviewPending = store.draft.isNotBlank()
         lastReply = ""; output.text = "Connected to ${target.name}. Ready for your next instruction."
         rebuildingSelections = true
@@ -1186,6 +1244,7 @@ class MainActivity : Activity() {
         updateProfiles(); rebuildingSelections = false; replaceTasks(catalog.tasks)
         updateDestination(); renderComputers(); persistChoices(); updateActivityBadge()
         polling = true; if (foreground) handler.post(poll)
+        if (chatOpen) { renderChat(); handler.post { loadChat() } }
         val message = "${target.name} is connected. All new instructions will go there now."
         showStatus(message)
         if (announce) { dismissSheet(); respond(message) }
@@ -1306,7 +1365,9 @@ class MainActivity : Activity() {
         executor.execute {
             try { work(ticket) } catch (failure: Exception) {
                 val error = when (failure) {
-                    is ApiFailure -> if (failure.status == 401) "This computer needs pairing again. Open the computer selector." else "The computer returned ${failure.code}. Your destination hasn't changed."
+                    is ApiFailure -> if (failure.status == 401) "This computer needs pairing again. Open the computer selector."
+                        else if (failure.status in listOf(404, 409, 429) && failure.serverMessage.isNotBlank()) failure.serverMessage
+                        else "The computer returned ${failure.code}. Your destination hasn't changed."
                     is java.io.IOException -> "Couldn't reach the computer. Check Tailscale and Chintu on that machine. Your destination hasn't changed."
                     is IllegalArgumentException, is IllegalStateException -> failure.message ?: "Couldn't load saved state."
                     else -> "Couldn't complete that request (${failure.javaClass.simpleName})."
@@ -1387,6 +1448,378 @@ class MainActivity : Activity() {
             ui(ticket) { lastReply = reply; output.text = "Connection test (no agent): $reply"; showStatus("Your text reached ${selectedComputer?.name}."); showConversation() }
         }
     }
+    // --- Conversations: voice and chat turns share one agent session and working directory. ---
+    private fun JSONObject.text(key: String): String = if (isNull(key)) "" else optString(key)
+    private fun enc(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
+    private fun shortTitle(text: String): String {
+        val line = text.trim().split(Regex("\\s+")).joinToString(" ")
+        return if (line.length <= 60) line else line.take(59).trimEnd() + "…"
+    }
+    private fun stamp(value: String): Long = try { java.time.Instant.parse(value).toEpochMilli() } catch (_: Exception) { 0L }
+    private fun folderLabel(path: String) = "📁 " + path.ifEmpty { "workspace root" }
+    private fun folderSpoken(path: String) = if (path.isEmpty()) "the workspace" else "the ${path.substringAfterLast('/')} folder"
+    /** Workspace, agent and permission profile chosen in Settings; a conversation pins all three. Main thread only. */
+    private fun selection(): Triple<String, String, String>? {
+        if (!::profile.isInitialized || profile.selectedItemPosition <= 0) return null
+        val chosenProject = projects.getOrNull(project.selectedItemPosition - 1)?.getString("project_id") ?: return null
+        val chosenProvider = capabilities.getOrNull(provider.selectedItemPosition - 1)?.getString("provider") ?: return null
+        return Triple(chosenProject, chosenProvider, profile.selectedItem.toString())
+    }
+    private fun sameChoice(chat: JSONObject, choice: Triple<String, String, String>) = chat.optString("project_id") == choice.first &&
+        chat.optString("provider") == choice.second && chat.optString("execution_profile") == choice.third
+    private fun freshChat(choice: Triple<String, String, String>, folder: String) = JSONObject()
+        .put("conversation_id", java.util.UUID.randomUUID().toString()).put("project_id", choice.first).put("provider", choice.second)
+        .put("execution_profile", choice.third).put("working_directory", folder).put("title", "").put("created", false)
+    private fun chatFromServer(value: JSONObject) = JSONObject().put("conversation_id", value.getString("conversation_id"))
+        .put("project_id", value.getString("project_id")).put("provider", value.getString("provider"))
+        .put("execution_profile", value.getString("execution_profile")).put("working_directory", value.text("working_directory"))
+        .put("title", value.text("title")).put("created", true)
+    /**
+     * The conversation the next turn joins, created on the computer first (idempotently, by its client ID).
+     * Changing workspace, agent or profile in Settings starts a new one in the same folder when the workspace is unchanged.
+     * Runs off the main thread.
+     */
+    private fun ensureConversation(origin: ClientStore, choice: Triple<String, String, String>): JSONObject {
+        var chat = origin.conversation
+        if (chat == null || !sameChoice(chat, choice)) {
+            val keep = chat?.takeIf { it.optString("project_id") == choice.first }?.text("working_directory").orEmpty()
+            chat = freshChat(choice, keep); origin.conversation = chat
+        }
+        if (chat.optBoolean("created")) return chat
+        val body = JSONObject().put("conversation_id", chat.getString("conversation_id")).put("project_id", choice.first)
+            .put("provider", choice.second).put("execution_profile", choice.third).put("working_directory", chat.text("working_directory"))
+        val response = try { api(origin).call("POST", "/api/v1/conversations", body.toString()) } catch (e: ApiFailure) {
+            // A vanished folder or a clash cannot be retried as is; the next message starts again at the workspace root.
+            if (e.status in listOf(404, 409, 422)) origin.conversation = null
+            throw e
+        }
+        val created = chatFromServer(response.getJSONObject("conversation"))
+        origin.conversation = created
+        return created
+    }
+    private fun updateChatHeader() {
+        if (!::chatLabel.isInitialized) return
+        val chat = if (store.gateway.isBlank()) null else store.conversation
+        val title = chat?.text("title")?.ifEmpty { null } ?: "New chat"
+        chatLabel.text = "💬  $title  ›"
+        chatTitle.text = title
+        val detail = chat?.let { "${folderLabel(it.text("working_directory"))} · ${it.optString("execution_profile")}" } ?: "Starts with your next message"
+        chatSubtitle.text = listOfNotNull(selectedComputer?.name, detail).joinToString("  ·  ")
+    }
+    private fun bubble(text: String, mine: Boolean, note: String?, alert: Boolean = false, pending: Boolean = false, extra: View? = null): TextView {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = if (mine) Gravity.END else Gravity.START }
+        val body = TextView(this).apply {
+            this.text = text; textSize = 15f; setTextColor(if (pending) muted else ink); setLineSpacing(dp(3).toFloat(), 1f)
+            maxWidth = (resources.displayMetrics.widthPixels * .78f).toInt(); setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = shape(if (mine) Color.rgb(72, 48, 109) else surface, 18, if (alert) Color.rgb(255, 150, 140) else null)
+            isClickable = true; isFocusable = true
+        }
+        row.addView(body, LinearLayout.LayoutParams(-2, -2))
+        note?.takeIf { it.isNotBlank() }?.let { row.addView(TextView(this).apply { this.text = it; textSize = 11f; setTextColor(muted); setPadding(dp(6), dp(2), dp(6), 0) }) }
+        extra?.let { row.addView(it) }
+        chatMessages.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        return body
+    }
+    private fun copy(text: String) {
+        getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(android.content.ClipData.newPlainText("Chintu", text))
+        showStatus("Copied.")
+    }
+    /** WhatsApp-style thread: your words on the right, the agent's replies on the left. Tap a reply to hear it. */
+    private fun renderChat() {
+        if (!::chatMessages.isInitialized) return
+        updateChatHeader()
+        chatMessages.removeAllViews()
+        if (chatTurns.isEmpty()) {
+            label(chatMessages, "Type below or tap the mic. Whatever you say by voice joins this chat too, and the agent remembers " +
+                "everything in it until you start a new chat.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(12), dp(40), dp(12), dp(12)) }
+            return
+        }
+        chatTurns.forEach { turn ->
+            val id = turn.getString("task_id"); val state = turn.getString("state"); val result = turn.optJSONObject("result")
+            bubble(turn.optString("instruction"), mine = true, note = timeAgo(stamp(turn.optString("created_at"))))
+            val active = state in setOf("queued", "running", "waiting_for_input", "cancelling")
+            val reply = when {
+                result != null -> result.optString("summary").ifBlank { "Finished: $state." }
+                state == "queued" -> "Queued, waiting its turn…"
+                state == "cancelling" -> "Stopping…"
+                else -> chatProgress[id] ?: "Working on it…"
+            }
+            val stop = if (active && state != "cancelling") TextView(this).apply {
+                text = "Stop"; textSize = 13f; setTextColor(accent); setPadding(dp(8), dp(6), dp(8), dp(6)); minHeight = dp(36)
+                contentDescription = "Stop this request on the computer"; setOnClickListener { cancelTurn(id) }
+            } else null
+            val note = if (active) null else timeAgo(stamp(turn.optString("updated_at"))) + if (state == "succeeded") "" else " · $state"
+            val view = bubble(reply, mine = false, note = note, alert = state in setOf("failed", "interrupted"), pending = active, extra = stop)
+            val spoken = result?.optString("speech_text").orEmpty().ifBlank { reply }
+            view.setOnClickListener { speak(spoken) }
+            view.setOnLongClickListener { copy(reply); true }
+        }
+        chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+    /** Reloads the current conversation's turns from the computer (oldest first, newest 200 kept). */
+    private fun loadChat() {
+        val chat = store.conversation; val origin = store
+        if (chat == null || !chat.optBoolean("created") || !connected || !store.isPaired()) { if (chat == null) chatTurns.clear(); renderChat(); return }
+        if (busy) { handler.postDelayed({ if (chatOpen) loadChat() }, 800); return }
+        val id = chat.getString("conversation_id")
+        background { ticket ->
+            val client = api(origin)
+            val fresh = try { client.call("GET", "/api/v1/conversations/$id") } catch (e: ApiFailure) {
+                if (e.status != 404) throw e
+                origin.conversation = null
+                ui(ticket) { chatTurns.clear(); renderChat(); showStatus("That chat is no longer on the computer. Your next message starts a new one.") }
+                return@background
+            }
+            val turns = mutableListOf<JSONObject>(); var next: String? = null; val seen = mutableSetOf<String>()
+            do {
+                val suffix = next?.let { "&cursor=" + enc(it) }.orEmpty()
+                val page = client.call("GET", "/api/v1/conversations/$id/tasks?limit=100$suffix"); val array = page.getJSONArray("tasks")
+                for (i in 0 until array.length()) turns.add(array.getJSONObject(i))
+                val cursorValue = if (page.isNull("next_cursor")) null else page.getString("next_cursor")
+                check(cursorValue == null || seen.add(cursorValue)) { "The computer repeated a chat cursor." }
+                next = cursorValue
+            } while (next != null && turns.size < 1000)
+            ui(ticket) {
+                if (origin.conversation?.optString("conversation_id") == id) {
+                    origin.conversation = chatFromServer(fresh); chatTurns = turns.takeLast(200).toMutableList(); renderChat()
+                }
+            }
+        }
+    }
+    private fun cancelTurn(id: String) {
+        val origin = store
+        background("Asking the computer to stop…") { ticket ->
+            val body = JSONObject().put("message_id", java.util.UUID.randomUUID().toString()).toString()
+            val task = api(origin).call("POST", "/api/v1/tasks/$id/cancel", body).getJSONObject("task")
+            ui(ticket) {
+                val index = chatTurns.indexOfFirst { it.getString("task_id") == id }
+                if (index >= 0) chatTurns[index] = task
+                renderChat(); showStatus("Asked ${selectedComputer?.name ?: "the computer"} to stop that request.")
+            }
+        }
+    }
+    /** A sheet over the chat (chats list, new chat, tools); voice pauses while it is open. */
+    private fun openOverlay(title: String, body: View): android.app.Dialog {
+        overlay?.dismiss()
+        inDialog = true; waitingForRoute = false; handler.removeCallbacks(routeTimeout); handler.removeCallbacks(listenAgain)
+        if (::speech.isInitialized) speech.cancelRecognition()
+        lateinit var dialog: android.app.Dialog
+        dialog = bottomSheet(title, body, tall = true) {
+            if (overlay === dialog) overlay = null
+            inDialog = (sheet?.isShowing == true && !chatOpen) || audioPicker?.isShowing == true; scheduleListening()
+        }
+        overlay = dialog
+        showSheet(dialog, tall = true)
+        return dialog
+    }
+    private fun showChats() {
+        if (!connected || !store.isPaired()) { showStatus("Connect a computer to see its chats."); return }
+        val origin = store
+        background("Loading chats…") { ticket ->
+            val page = api(origin).call("GET", "/api/v1/conversations?limit=50")
+            val array = page.getJSONArray("conversations")
+            val rows = (0 until array.length()).map { array.getJSONObject(it) }
+            ui(ticket) {
+                val scroller = ScrollView(this); val body = column(scroller, 20)
+                lateinit var dialog: android.app.Dialog
+                button(body, "＋ New chat", true) { dialog.dismiss(); showNewChat() }; gap(body)
+                if (rows.isEmpty()) label(body, "No chats yet on ${selectedComputer?.name ?: "this computer"}. Your first message starts one.", 14f, muted)
+                val current = origin.conversation?.optString("conversation_id")
+                rows.forEach { value ->
+                    val mine = value.getString("conversation_id") == current
+                    val row = column(padding = 14).apply { background = shape(surface, 18, if (mine) accent else null); isClickable = true; isFocusable = true }
+                    val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                    row.addView(head, LinearLayout.LayoutParams(-1, -2))
+                    if (value.getString("state") == "working") head.addView(TextView(this).apply { text = "◌"; textSize = 13f; setTextColor(accent) }, LinearLayout.LayoutParams(dp(20), -2))
+                    head.addView(TextView(this).apply {
+                        text = value.text("title").ifEmpty { "New chat" }; textSize = 15f; setTextColor(ink); maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                    head.addView(TextView(this).apply { text = timeAgo(stamp(value.optString("updated_at"))); textSize = 12f; setTextColor(muted) }, LinearLayout.LayoutParams(-2, -2))
+                    label(row, "${folderLabel(value.text("working_directory"))} · ${value.optString("execution_profile")} · ${value.optInt("turns")} messages", 12f, muted)
+                    value.text("last_text").takeIf { it.isNotEmpty() }?.let { label(row, it, 13f, ink).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END } }
+                    row.contentDescription = value.text("title").ifEmpty { "New chat" } + if (mine) ", current chat" else ""
+                    row.setOnClickListener { dialog.dismiss(); selectChat(value) }
+                    row.setOnLongClickListener { confirmArchive(value, dialog); true }
+                    body.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+                }
+                label(body, if (page.isNull("next_cursor")) "Hold a chat to archive it." else "Showing the 50 most recent chats. Hold a chat to archive it.", 12f, muted)
+                dialog = openOverlay("Chats · ${selectedComputer?.name.orEmpty()}", scroller)
+            }
+        }
+    }
+    private fun selectChat(value: JSONObject) {
+        store.conversation = chatFromServer(value); chatTurns.clear(); chatProgress.clear()
+        applyChoice(value)
+        if (chatOpen && sheet?.isShowing == true) { renderChat(); loadChat() } else showConversation()
+    }
+    /** Opening an older chat also selects its workspace, agent and profile, so the next message continues it. */
+    private fun applyChoice(chat: JSONObject) {
+        val projectIndex = projects.indexOfFirst { it.getString("project_id") == chat.getString("project_id") }
+        val providerIndex = capabilities.indexOfFirst { it.getString("provider") == chat.getString("provider") }
+        if (projectIndex < 0 || providerIndex < 0) {
+            showStatus("That chat's workspace or agent isn't offered any more, so your next message starts a new chat."); return
+        }
+        rebuildingSelections = true
+        project.setSelection(projectIndex + 1); provider.setSelection(providerIndex + 1)
+        store.choose("profile", chat.getString("execution_profile")); updateProfiles()
+        rebuildingSelections = false; persistChoices()
+        if (selection()?.third != chat.getString("execution_profile"))
+            showStatus("That chat's permission profile isn't offered any more, so your next message starts a new chat.")
+    }
+    private fun confirmArchive(value: JSONObject, list: android.app.Dialog) {
+        val body = column(padding = 20)
+        label(body, "Hide “${value.text("title").ifEmpty { "this chat" }}” from your chats? The computer keeps its history.", 15f); gap(body)
+        val dialog = bottomSheet("Archive chat", body)
+        button(body, "Archive", true) {
+            dialog.dismiss(); list.dismiss()
+            val origin = store; val id = value.getString("conversation_id")
+            background("Archiving…") { ticket ->
+                api(origin).call("DELETE", "/api/v1/conversations/$id")
+                ui(ticket) {
+                    if (origin.conversation?.optString("conversation_id") == id) { origin.conversation = null; chatTurns.clear(); renderChat() }
+                    showStatus("Chat archived.")
+                }
+            }
+        }
+        gap(body, 8)
+        button(body, "Keep it") { dialog.dismiss() }
+        showSheet(dialog)
+    }
+    /** New chat: a fresh agent session in a folder chosen from the workspace. */
+    private fun showNewChat() {
+        val choice = selection()
+        if (!connected || choice == null) {
+            if (!connected) showStatus("Connect a computer first.") else { showStatus("Choose a workspace, agent and permission profile first."); showPage(2) }
+            return
+        }
+        val workspaceName = projects.firstOrNull { it.getString("project_id") == choice.first }?.optString("display_name") ?: choice.first
+        val scroller = ScrollView(this); val body = column(scroller, 20)
+        label(body, "A new chat starts a fresh agent session. Pick the folder it works in; the chat keeps that folder.", 13f, muted); gap(body)
+        label(body, "$workspaceName  ·  ${choice.third}", 15f, ink, true)
+        label(body, "Change the workspace or permission profile in Settings.", 12f, muted); gap(body)
+        val where = label(body, folderLabel(""), 16f, accent, true); gap(body, 8)
+        var current = store.conversation?.takeIf { it.optString("project_id") == choice.first }?.text("working_directory").orEmpty()
+        lateinit var dialog: android.app.Dialog
+        button(body, "Start chat in this folder", true) { dialog.dismiss(); startChat(choice, current, announce = false) }; gap(body)
+        val list = column(body)
+        val origin = store
+        fun browse(path: String) {
+            background { ticket ->
+                val page = try {
+                    api(origin).call("GET", "/api/v1/directories?project_id=${enc(choice.first)}&path=${enc(path)}")
+                } catch (e: ApiFailure) {
+                    if (e.status != 404 || path.isEmpty()) throw e
+                    api(origin).call("GET", "/api/v1/directories?project_id=${enc(choice.first)}&path=")
+                }
+                val entries = page.getJSONArray("entries")
+                ui(ticket) {
+                    current = page.text("path"); where.text = folderLabel(current); list.removeAllViews()
+                    if (!page.isNull("parent")) {
+                        val up = page.text("parent")
+                        button(list, "↑  Up to ${up.ifEmpty { "workspace root" }}") { handler.post { browse(up) } }; gap(list, 6)
+                    }
+                    if (entries.length() == 0) label(list, "No folders inside this one.", 13f, muted)
+                    for (i in 0 until entries.length()) {
+                        val entry = entries.getJSONObject(i)
+                        button(list, "📁  ${entry.getString("name")}  ›") { handler.post { browse(entry.getString("path")) } }; gap(list, 6)
+                    }
+                    if (page.optBoolean("truncated")) label(list, "Only the first 500 folders are shown.", 12f, muted)
+                }
+            }
+        }
+        dialog = openOverlay("New chat", scroller)
+        browse(current)
+    }
+    private fun startChat(choice: Triple<String, String, String>, folder: String, announce: Boolean) {
+        val origin = store
+        origin.conversation = freshChat(choice, folder); chatTurns.clear(); chatProgress.clear(); renderChat()
+        background("Starting a new chat…") { ticket ->
+            val chat = ensureConversation(origin, choice)
+            ui(ticket) {
+                renderChat()
+                val message = "New chat in ${folderSpoken(chat.text("working_directory"))}. I'm starting fresh."
+                if (announce) respond(message) else { showStatus(message); handler.post { showConversation() } }
+            }
+        }
+    }
+    /** "Chintu, new chat [in FOLDER]": the folder is matched by its exact name at the top of the workspace or in the current folder. */
+    private fun startChatByVoice(folder: String?) {
+        val choice = selection()
+        if (selectedComputer == null || !connected || choice == null) {
+            respond(if (!connected) "Connect a computer first, then ask me for a new chat." else "Choose a workspace and permission profile in Settings first.")
+            return
+        }
+        val keep = store.conversation?.takeIf { it.optString("project_id") == choice.first }?.text("working_directory").orEmpty()
+        if (folder == null) { startChat(choice, keep, announce = true); return }
+        val origin = store
+        background("Looking for the $folder folder…") { ticket ->
+            val candidates = linkedMapOf<String, String>()
+            for (base in listOf("", keep).distinct()) {
+                val page = try {
+                    api(origin).call("GET", "/api/v1/directories?project_id=${enc(choice.first)}&path=${enc(base)}")
+                } catch (e: ApiFailure) { if (e.status == 404) continue else throw e }
+                if (base.isNotEmpty()) candidates.putIfAbsent(base, base.substringAfterLast('/'))
+                val entries = page.getJSONArray("entries")
+                for (i in 0 until entries.length()) entries.getJSONObject(i).let { candidates.putIfAbsent(it.getString("path"), it.getString("name")) }
+            }
+            val match = DestinationMatcher.match(folder, candidates.filter { VoiceCommand.normalize(it.value).isNotEmpty() }
+                .map { (path, name) -> DestinationMatcher.Destination(path, name, "") })
+            ui(ticket) {
+                when (match.status()) {
+                    DestinationMatcher.Status.MATCHED -> handler.post { startChat(choice, match.destination().id(), announce = true) }
+                    DestinationMatcher.Status.AMBIGUOUS -> respond("More than one folder is called $folder. Pick the one you mean on screen.")
+                    else -> respond("I couldn't find a folder called $folder. Say Chintu, new chat, or pick a folder on screen.")
+                }
+            }
+        }
+    }
+    /** What the agent can use in the current chat: built-in tools, MCP servers with their tools, and skills. */
+    private fun showTools() {
+        val chat = store.conversation; val choice = selection()
+        val projectId = chat?.optString("project_id")?.ifEmpty { null } ?: choice?.first
+        val profileName = chat?.optString("execution_profile")?.ifEmpty { null } ?: choice?.third
+        if (!connected || projectId == null || profileName == null) { showStatus("Connect a computer and choose a workspace first."); return }
+        val folder = chat?.text("working_directory").orEmpty(); val origin = store; val name = selectedComputer?.name ?: "the computer"
+        background("Asking $name which tools it has…") { ticket ->
+            val catalog = api(origin).call("GET", "/api/v1/tools?project_id=${enc(projectId)}&execution_profile=${enc(profileName)}&working_directory=${enc(folder)}")
+            ui(ticket) { renderTools(catalog, name) }
+        }
+    }
+    private fun renderTools(catalog: JSONObject, computer: String) {
+        val scroller = ScrollView(this); val body = column(scroller, 20)
+        val profileName = catalog.optString("execution_profile")
+        label(body, when (catalog.optString("source")) {
+            "probe" -> "Live from Claude Code on $computer."
+            "cached" -> "From the last check on $computer."
+            else -> "Fixed for the $profileName profile."
+        }, 13f, muted)
+        catalog.text("reason").takeIf { it.isNotEmpty() }?.let { gap(body, 6); label(body, it, 13f, muted) }
+        fun list(key: String) = catalog.optJSONArray(key)?.let { array -> (0 until array.length()).map { array.getJSONObject(it) } }.orEmpty()
+        val tools = list("tools"); val servers = list("mcp_servers"); val skills = list("skills")
+        fun section(title: String) { gap(body, 14); label(body, title, 17f, ink, true); gap(body, 4) }
+        fun entry(parent: LinearLayout, name: String, detail: String) {
+            label(parent, name, 14f, ink, true).setPadding(0, dp(6), 0, 0)
+            if (detail.isNotEmpty()) label(parent, detail, 12f, muted)
+        }
+        val builtins = tools.filter { it.optString("kind") == "builtin" }
+        if (builtins.isNotEmpty()) { section("Built-in tools · ${builtins.size}"); builtins.forEach { entry(body, it.getString("name"), it.text("description")) } }
+        if (servers.isNotEmpty()) {
+            section("MCP servers · ${servers.size}")
+            servers.forEach { server ->
+                val box = card(body)
+                val status = server.optString("status")
+                val color = when (status) { "connected" -> Color.rgb(140, 230, 170); "failed" -> Color.rgb(255, 150, 140); else -> muted }
+                label(box, "●  ${server.getString("name")}", 15f, ink, true).setTextColor(color)
+                label(box, "$status · ${server.optInt("tools")} tools", 12f, muted)
+                tools.filter { it.optString("kind") == "mcp" && it.text("server") == server.getString("name") }
+                    .forEach { entry(box, it.getString("name").substringAfterLast("__"), it.text("description")) }
+            }
+        }
+        if (skills.isNotEmpty()) { section("Skills & commands · ${skills.size}"); skills.forEach { entry(body, "/" + it.getString("name"), it.text("description")) } }
+        if (tools.isEmpty() && servers.isEmpty() && skills.isEmpty()) { gap(body); label(body, "No tools reported for this chat.", 14f, muted) }
+        openOverlay("Tools · $profileName", scroller)
+    }
     private fun submit() {
         if (busy) { showStatus("Wait for the current request to finish."); reviewPending = true; return }
         val origin = store; val submission = guard; val destination = selectedComputer?.name ?: "computer"
@@ -1407,12 +1840,23 @@ class MainActivity : Activity() {
         // A reserved Chintu command can never be submitted via the task button or automatic sending.
         if (submission.pending() == null && VoiceCommand.parse(text).kind() != VoiceCommand.Kind.TASK) { onUtterance(text); return }
         speech.cancelRecognition(); handler.removeCallbacks(listenAgain); origin.draft = text
+        val choice = selection()
         background("Sending to $destination…") { ticket ->
-            val request = submission.prepare { key -> JSONObject().put("submission_key", key)
-                .put("project_id", registered!!.getString("project_id")).put("provider", enabled!!.getString("provider"))
-                .put("execution_profile", selectedProfile).put("instruction", text).toString() }
+            // Every instruction is a turn of the current conversation, so the agent resumes the same session.
+            val request = submission.prepare { key ->
+                val chat = ensureConversation(origin, choice ?: error("Choose a workspace, agent and permission profile in Settings first."))
+                JSONObject().put("submission_key", key)
+                    .put("project_id", registered!!.getString("project_id")).put("provider", enabled!!.getString("provider"))
+                    .put("execution_profile", selectedProfile).put("instruction", text)
+                    .put("conversation_id", chat.getString("conversation_id")).toString() }
             val response = try { api(origin).call("POST", "/api/v1/tasks", request) } catch (e: ApiFailure) {
-                if (e.status in listOf(400, 413, 422, 501)) submission.rejected(); throw e
+                if (e.status in listOf(400, 413, 422, 501)) submission.rejected()
+                if (e.status == 404 || (e.status == 409 && "start a new one" in e.serverMessage)) {
+                    // The chat is gone, archived or no longer matches: the next send starts a new one.
+                    submission.rejected(); origin.conversation = null
+                    error(e.serverMessage.ifBlank { "That chat can't take new messages." } + " Send it again to start a new chat.")
+                }
+                throw e
             }
             val accepted = response.getJSONObject("task"); validateAccepted(accepted, JSONObject(request))
             check(response.get("replayed") is Boolean) { "The receipt is incomplete. Retry the saved instruction." }
@@ -1422,8 +1866,11 @@ class MainActivity : Activity() {
                 task.setSelection(1)
                 if (transcript.text.toString().trim() == JSONObject(request).getString("instruction")) setTranscript("")
                 origin.draft = transcript.text.toString(); reviewPending = origin.draft.isNotBlank(); showTask(accepted)
-                if (!reviewPending) dismissSheet()
+                if (!reviewPending && !chatOpen) dismissSheet()
                 activityStore().record(accepted); updateActivityBadge()
+                origin.conversation?.let { chat -> if (chat.text("title").isEmpty()) { chat.put("title", shortTitle(text)); origin.conversation = chat } }
+                if (chatTurns.any { it.text("conversation_id") != accepted.text("conversation_id") }) { chatTurns.clear(); chatProgress.clear() }
+                chatTurns.removeAll { it.getString("task_id") == accepted.getString("task_id") }; chatTurns.add(accepted); renderChat()
                 showStatus(if (quiet.isChecked) "Queued on $destination. The result will appear in Activity."
                     else "Instruction accepted by $destination${if (response.getBoolean("replayed")) " (existing task)" else ""}.")
                 working = true; workingInstruction = text; setPhase(VoicePhase.THINKING)
@@ -1441,6 +1888,7 @@ class MainActivity : Activity() {
         val id = value.getString("task_id")
         check(java.util.UUID.fromString(id).toString().equals(id, ignoreCase = true)) { "Invalid task receipt; saved instruction retained." }
         for (field in listOf("provider", "project_id", "execution_profile")) check(value.getString(field) == submitted.getString(field)) { "The receipt doesn't match; saved instruction retained." }
+        check(value.text("conversation_id") == submitted.text("conversation_id")) { "The receipt names another chat; saved instruction retained." }
         check(value.getString("state") in setOf("queued", "running", "waiting_for_input", "cancelling", "succeeded", "failed", "cancelled", "interrupted"))
         val version = value.get("task_version")
         check((version is Int || version is Long) && (version as Number).toLong() >= 1)
@@ -1462,6 +1910,7 @@ class MainActivity : Activity() {
     private fun pollEvents() {
         if (busy) { if (foreground && polling) handler.postDelayed(poll, 1000); return }
         val origin = store; val eventCursor = cursor; val selectedId = selectedTask()?.getString("task_id"); val speakNew = speakingAllowed()
+        val watched = chatTurns.map { it.getString("task_id") }.toSet()
         background { ticket ->
             try {
                 val client = api(origin)
@@ -1469,9 +1918,15 @@ class MainActivity : Activity() {
                 val events = page.getJSONArray("events"); val messages = mutableListOf<String>(); val live = eventCursor.canSpeak(); var changed = false
                 val progressLines = mutableListOf<Pair<String, String>>(); var finished = false
                 val finishedIds = mutableSetOf<String>()
+                val chatChanged = linkedSetOf<String>(); val chatLines = mutableMapOf<String, String>()
                 for (i in 0 until events.length()) {
                     val event = events.getJSONObject(i)
                     if (!eventCursor.accept(event.getLong("event_id"))) continue
+                    if (event.getString("task_id") in watched) {
+                        chatChanged.add(event.getString("task_id"))
+                        if (event.getString("kind") in listOf("progress", "output"))
+                            event.getJSONObject("payload").optString("text").takeIf { it.isNotBlank() }?.let { chatLines[event.getString("task_id")] = it }
+                    }
                     if (event.getString("kind") in listOf("completed", "failed", "cancelled", "interrupted")) finishedIds.add(event.getString("task_id"))
                     if (event.getString("task_id") == selectedId) {
                         changed = true
@@ -1485,11 +1940,22 @@ class MainActivity : Activity() {
                 }
                 eventCursor.finishPage(page.getLong("next_cursor"), page.getBoolean("has_more")); origin.cursor = eventCursor.get()
                 val snapshot = if (changed && selectedId != null) client.call("GET", "/api/v1/tasks/$selectedId") else null
+                val chatSnapshots = chatChanged.filter { it != selectedId }.takeLast(5).map { client.call("GET", "/api/v1/tasks/$it") } +
+                    listOfNotNull(snapshot?.takeIf { selectedId != null && selectedId in chatChanged })
                 // Final outcomes of every task land in the on-phone activity log, whichever task is selected.
                 val log = ActivityStore(this, origin.gateway)
                 finishedIds.forEach { id -> try { log.record(client.call("GET", "/api/v1/tasks/$id")) } catch (_: Exception) { } }
                 ui(ticket) {
                     if (finishedIds.isNotEmpty()) { updateActivityBadge(); if (sheet?.isShowing == true && activityList.parent != null) renderActivity() }
+                    if (chatSnapshots.isNotEmpty() || chatLines.isNotEmpty()) {
+                        chatLines.forEach { (id, line) -> chatProgress[id] = conversational("progress", line)?.replaceFirstChar { it.uppercase() } ?: line.take(140) }
+                        chatSnapshots.forEach { fresh ->
+                            val index = chatTurns.indexOfFirst { it.getString("task_id") == fresh.getString("task_id") }
+                            if (index >= 0) chatTurns[index] = fresh
+                            if (fresh.getString("state") in setOf("succeeded", "failed", "cancelled", "interrupted")) chatProgress.remove(fresh.getString("task_id"))
+                        }
+                        renderChat()
+                    }
                     if (selectedTask()?.optString("task_id") == selectedId) {
                         // Show the daemon's activity as it happens: "Reading: …", "Running: …", first words of output.
                         progressLines.lastOrNull { it.second.isNotBlank() }?.let { line ->

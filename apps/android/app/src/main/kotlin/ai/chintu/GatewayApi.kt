@@ -5,7 +5,7 @@ import java.net.URI
 import java.io.ByteArrayOutputStream
 import javax.net.ssl.HttpsURLConnection
 
-class ApiFailure(val status: Int, val code: String, val retryable: Boolean, val details: JSONObject) :
+class ApiFailure(val status: Int, val code: String, val retryable: Boolean, val details: JSONObject, val serverMessage: String = "") :
     Exception("Gateway returned HTTP $status ($code).")
 
 /** Called off the main thread. System TLS validation remains enabled; redirects are rejected. */
@@ -59,7 +59,7 @@ class GatewayApi(private val base: String, private val token: String? = null) {
             if (status !in 200..299) {
                 val error = json.optJSONObject("error") ?: JSONObject()
                 throw ApiFailure(status, error.optString("code", "http_error"), error.optBoolean("retryable"),
-                    error.optJSONObject("details") ?: JSONObject())
+                    error.optJSONObject("details") ?: JSONObject(), error.optString("message").take(300))
             }
             return json
         } finally { connection.disconnect() }

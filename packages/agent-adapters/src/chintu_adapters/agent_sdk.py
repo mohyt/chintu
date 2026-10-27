@@ -147,7 +147,7 @@ class ClaudeAgentAdapter:
                  profiles: tuple[str, ...] = DEFAULT_PROFILES, load_user_settings: bool = True,
                  max_turns: int | None = None, timeout_seconds: float = 1800, stop_seconds: float = 10,
                  max_progress_events: int = 150, max_output_events: int = 60, sdk=None,
-                 persona: str | None = DEFAULT_PERSONA, probe_seconds: float = 20,
+                 persona: str | None = DEFAULT_PERSONA, probe_seconds: float = 10,
                  catalog_seconds: float = 300) -> None:
         self.executable = executable
         self.persona = persona
