@@ -146,7 +146,8 @@ def main():
         logging.getLogger("chintu").warning(
             "Tailscale is not installed on this computer; the phone cannot reach the gateway until it is "
             "(https://tailscale.com/download), and Tailscale Serve is enabled for port %s", args.port)
-    uvicorn.run(app, host="127.0.0.1", port=args.port, workers=1, access_log=False)
+    # Open event streams never finish on their own; give them a few seconds, then let the restart proceed.
+    uvicorn.run(app, host="127.0.0.1", port=args.port, workers=1, access_log=False, timeout_graceful_shutdown=3)
 
 
 if __name__ == "__main__":

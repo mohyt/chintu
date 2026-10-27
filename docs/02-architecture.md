@@ -108,6 +108,10 @@ An explicit follow-up to a succeeded task queues a new attempt in the same suppo
 | Artifact | Artifact ID, task, relative storage path, MIME type, size, creation time |
 | Phone speech session | Client-local listening/playback state and audio routes; server retains conversation/task identity, not audio |
 
+### Event delivery
+
+Events are written once, in the SQLite transaction that changes the task. Clients read them two ways from the same table and cursor: `GET /api/v1/events` (polling) and `GET /api/v1/events/stream` (server-sent events over the same Tailscale HTTPS origin). After each committing transaction that stored events, the store notifies an in-process hub that wakes open streams; streams also re-check the table every five seconds, so writers in other processes (operator reconciliation) are delivered too. Because the stream is only a faster read of durable events, losing it, the gateway restarting, or the phone changing networks loses nothing: the phone resumes from its last event ID or falls back to polling (D23). Streams are bounded per client and in total, recycled every 15 minutes, re-authorised every heartbeat, and given three seconds at shutdown.
+
 ### Conversations
 
 A conversation is the unit voice and chat share (D22). Each instruction, spoken or typed, is a task submitted with a `conversation_id`; the gateway takes the conversation's latest provider session ID when the worker claims the turn and passes it as `resume`, and every `started` event updates it. Turns therefore continue one agent session in order, and the global single worker keeps them from overlapping. Project, provider, execution profile and working directory are fixed for the conversation's life, because Claude Code stores sessions per working directory and a profile change would change authority mid-session; changing any of them starts a new conversation. A `conversation_id` the gateway has not seen starts a conversation at the workspace root, which keeps older clients working.

@@ -147,6 +147,11 @@ class MainActivity : Activity() {
     /** Finished turns whose full output was fetched on request. */
     private val chatExpanded = mutableSetOf<String>()
     private var overlay: android.app.Dialog? = null
+    /** Push channel for events (server-sent events); polling stays on as the safety net and takes over when it is down. */
+    private var stream: EventStream? = null
+    private var streamLive = false
+    private var lastPollAt = 0L
+    private val renderSoon = Runnable { if (chatOpen) renderChat() }
     private var sheet: android.app.Dialog? = null
     private var projects = emptyList<JSONObject>()
     private var capabilities = emptyList<JSONObject>()
@@ -1154,7 +1159,7 @@ class MainActivity : Activity() {
         val client = ClientStore(this, target.url)
         val wasActive = selectedComputer?.url == target.url
         if (wasActive) {
-            epoch++; polling = false; handler.removeCallbacks(poll); pendingReply = null
+            epoch++; polling = false; handler.removeCallbacks(poll); pendingReply = null; stopStream()
             connected = false; selectedComputer = null
             store = ClientStore(this, ""); guard = SubmissionGuard(store); cursor = EventCursor(store.cursor)
             projects = emptyList(); capabilities = emptyList(); tasks = emptyList()
@@ -1247,6 +1252,7 @@ class MainActivity : Activity() {
         updateProfiles(); rebuildingSelections = false; replaceTasks(catalog.tasks)
         updateDestination(); renderComputers(); persistChoices(); updateActivityBadge()
         polling = true; if (foreground) handler.post(poll)
+        startStream()
         if (chatOpen) { renderChat(); handler.post { loadChat() } }
         val message = "${target.name} is connected. All new instructions will go there now."
         showStatus(message)
@@ -1450,6 +1456,43 @@ class MainActivity : Activity() {
             val reply = api(origin).call("POST", "/api/v1/echo", JSONObject().put("text", text).toString()).getString("text")
             ui(ticket) { lastReply = reply; output.text = "Connection test (no agent): $reply"; showStatus("Your text reached ${selectedComputer?.name}."); showConversation() }
         }
+    }
+    // --- Event stream: pushes each event as it commits; polling remains the source of truth for the cursor. ---
+    private fun startStream() {
+        stopStream()
+        if (!foreground || !connected || !store.isPaired()) return
+        val ticket = epoch; val origin = store
+        val token = try { origin.token() } catch (_: Exception) { null } ?: return
+        stream = EventStream(origin.gateway, token, cursor.get(),
+            { event -> handler.post { if (epoch == ticket && store === origin) onStreamEvent(event) } },
+            { state -> handler.post { if (epoch == ticket && store === origin) onStreamState(state) } }).also { it.start() }
+    }
+    private fun stopStream() { stream?.stop(); stream = null; streamLive = false }
+    private fun onStreamState(state: EventStream.State) {
+        val wasLive = streamLive
+        streamLive = state == EventStream.State.LIVE
+        android.util.Log.i("Chintu", "event stream: $state")
+        // Either way the poll path catches up: on connect it covers the gap before the stream, on loss it resumes its cadence.
+        if (streamLive != wasLive) requestPoll()
+        // The stream came back after polling gave up: the computer is reachable again, so reconnect fully.
+        if (streamLive && !polling && !busy) selectedComputer?.let { connect(it, false) }
+    }
+    private fun onStreamEvent(event: JSONObject) {
+        // Events still arrive although a poll failed: the computer is reachable, so restore the full connection.
+        if (!polling) { if (!busy) selectedComputer?.let { connect(it, false) }; return }
+        val kind = event.getString("kind"); val taskId = event.getString("task_id")
+        if (kind in setOf("progress", "output", "output_delta") && chatTurns.any { it.getString("task_id") == taskId }) {
+            chatEvents.getOrPut(taskId) { ChatTranscript() }.add(event.getLong("event_id"), kind, event.getJSONObject("payload").optString("text"))
+            if (chatOpen) { handler.removeCallbacks(renderSoon); handler.postDelayed(renderSoon, 120) }
+        }
+        // Deltas only feed the chat; anything else takes the normal poll path (speech, activity, snapshots, cursor).
+        if (kind != "output_delta") requestPoll()
+    }
+    /** A prompt poll, at most one about every 0.7 s however fast events arrive. */
+    private fun requestPoll() {
+        if (!foreground || !polling) return
+        handler.removeCallbacks(poll)
+        handler.postDelayed(poll, maxOf(150L, 700L - (System.currentTimeMillis() - lastPollAt)))
     }
     // --- Conversations: voice and chat turns share one agent session and working directory. ---
     private fun JSONObject.text(key: String): String = if (isNull(key)) "" else optString(key)
@@ -1973,7 +2016,8 @@ class MainActivity : Activity() {
             (result?.optString("summary") ?: value.optJSONObject("pending_input")?.optString("question") ?: "Your computer is working on it.")
     }
     private fun pollEvents() {
-        if (busy) { if (foreground && polling) handler.postDelayed(poll, 1000); return }
+        if (busy) { if (foreground && polling) { handler.removeCallbacks(poll); handler.postDelayed(poll, 1000) }; return }
+        lastPollAt = System.currentTimeMillis()
         val origin = store; val eventCursor = cursor; val selectedId = selectedTask()?.getString("task_id"); val speakNew = speakingAllowed()
         val watched = chatTurns.map { it.getString("task_id") }.toSet()
         background { ticket ->
@@ -2035,9 +2079,18 @@ class MainActivity : Activity() {
                         if (foreground && polling && speakNew && speakingAllowed())
                             messages.lastOrNull()?.let { pendingReply = selectedId!! to it }
                     }
-                    // Poll every second while a chat turn runs in front of the owner, so its output streams.
+                    // With the push stream up, polling is only a safety net; without it, poll every second while a
+                    // chat turn runs in front of the owner so its output still streams.
                     val streaming = chatOpen && chatTurns.any { it.getString("state") in activeStates }
-                    if (foreground && polling) handler.postDelayed(poll, if (page.getBoolean("has_more")) 100 else if (streaming) 1000 else 3000)
+                    if (foreground && polling) {
+                        handler.removeCallbacks(poll)
+                        handler.postDelayed(poll, when {
+                            page.getBoolean("has_more") -> 100
+                            streamLive -> 15_000
+                            streaming -> 1000
+                            else -> 3000
+                        })
+                    }
                 }
             } catch (e: ApiFailure) {
                 if (e.status == 410 && e.code == "cursor_expired") {
@@ -2099,7 +2152,7 @@ class MainActivity : Activity() {
         if (working) guard.acceptedTaskId()?.let { id ->
             selectedComputer?.let { TaskWatchService.start(this, it.url, id, it.name, workingInstruction) }
         }
-        foreground = false; polling = false; connected = false; epoch++
+        foreground = false; polling = false; connected = false; epoch++; stopStream()
         waitingForRoute = false; pendingReply = null; handler.removeCallbacks(routeTimeout)
         handler.removeCallbacks(poll); handler.removeCallbacks(listenAgain); handler.removeCallbacks(rotateSuggestion)
         handsFree.isChecked = false; speech.pause(); audio.pause(); muteRecognizerTones(false)
@@ -2111,6 +2164,6 @@ class MainActivity : Activity() {
     }
     override fun onSaveInstanceState(state: Bundle) { state.putString("transcript", transcript.text.toString()); super.onSaveInstanceState(state) }
     override fun onDestroy() {
-        epoch++; foreground = false; audioPicker?.dismiss(); dismissSheet(); speech.close(); audio.close(); executor.shutdownNow(); handler.removeCallbacksAndMessages(null); super.onDestroy()
+        epoch++; foreground = false; stopStream(); audioPicker?.dismiss(); dismissSheet(); speech.close(); audio.close(); executor.shutdownNow(); handler.removeCallbacksAndMessages(null); super.onDestroy()
     }
 }

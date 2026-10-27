@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -54,6 +55,9 @@ class Store:
         if type(token_ttl_days) is not int or not 1 <= token_ttl_days <= 365:
             raise ValueError("token_ttl_days must be an integer between 1 and 365")
         self.token_ttl_seconds = token_ttl_days * 86400
+        # Called after a transaction that stored events commits (the event stream's wake-up); never inside it.
+        self.listeners = []
+        self._local = threading.local()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # umask must also protect WAL/SHM and worker-lock files at runtime.
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -131,12 +135,18 @@ class Store:
     def transaction(self):
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._local.events = False
             try:
                 yield db
                 db.commit()
             except BaseException:
                 db.rollback()
                 raise
+            finally:
+                wrote, self._local.events = self._local.events, False
+        if wrote:
+            for listener in self.listeners:
+                listener()
 
     def create_enrollment(self, ttl_seconds=300):
         if not 1 <= ttl_seconds <= 900:
@@ -283,6 +293,7 @@ class Store:
                             (snapshot["task_id"], encode(envelope)))
         envelope["event_id"] = cursor.lastrowid
         db.execute("UPDATE events SET envelope=? WHERE event_id=?", (encode(envelope), cursor.lastrowid))
+        self._local.events = True
         db.execute("UPDATE tasks SET snapshot=?,state=? WHERE task_id=?",
                    (encode(snapshot), snapshot["state"], snapshot["task_id"]))
         if snapshot["state"] == "interrupted" and snapshot["provider"] != "scripted":

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import secrets
 import sqlite3
@@ -14,7 +15,7 @@ from chintu_adapters.types import tool_catalog
 import logging
 
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
@@ -27,6 +28,7 @@ from .store import Store
 from .systems import TailscaleDiscovery
 from . import pairing_page
 from . import workspace as workspaces
+from .stream import EventHub, StreamRegistry, frame
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,10 @@ class Settings:
     login_method: str | None = None
     notes_dir: Path | None = None
     token_ttl_days: int = 30
+    # Event stream: heartbeat keeps proxies and the phone's read timeout alive; streams are recycled after max seconds.
+    stream_heartbeat_seconds: float = 15
+    stream_max_seconds: float = 900
+    stream_check_seconds: float = 5
 
 
 DEFAULT_PORT = 8765
@@ -160,12 +166,15 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
                   project_paths={key: value["path"] for key, value in settings.projects.items()},
                   token_ttl_days=settings.token_ttl_days)
     local_secret = write_local_secret(settings)
+    hub, streams = EventHub(), StreamRegistry()
+    store.listeners.append(hub.notify)
     pair_limiter = RateLimiter()
     manager = Manager(store, contract, adapter, settings.projects)
     discovery = systems_discovery if systems_discovery is not None else TailscaleDiscovery()
 
     @asynccontextmanager
     async def lifespan(app):
+        hub.bind(asyncio.get_running_loop())
         if settings.enable_worker:
             await manager.start()
         try:
@@ -178,6 +187,7 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     app.add_middleware(BodyLimit)
     app.state.store, app.state.manager, app.state.contract = store, manager, contract
     app.state.local_secret = local_secret
+    app.state.hub, app.state.streams = hub, streams
 
     @app.exception_handler(ApiError)
     async def api_error(request, error):
@@ -498,6 +508,61 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
         task_id = request.query_params.get("task_id")
         return store.events_page(after, limit, identifier(task_id) if task_id is not None else None,
                                  request.state.client_id)
+
+    @api.get("/events/stream")
+    async def event_stream(request: Request):
+        """Server-sent events: replay after the cursor, then push each event as it commits."""
+        client_id = request.state.client_id
+        token = request.headers.get("Authorization", "")[7:]
+        # Last-Event-ID is the standard SSE resume point and wins over the query cursor.
+        resume = request.headers.get("Last-Event-ID")
+        after = integer(resume if resume is not None else request.query_params.get("after", "0"))
+        task_id = request.query_params.get("task_id")
+        task_id = identifier(task_id) if task_id is not None else None
+        lifetime = settings.stream_max_seconds
+        if request.query_params.get("max_seconds") is not None:
+            lifetime = min(lifetime, integer(request.query_params["max_seconds"], 1, 86400))
+        heartbeat = settings.stream_heartbeat_seconds
+        store.events_page(after, 1, task_id, client_id)  # An impossible cursor fails here, before the 200.
+        ticket = streams.open(client_id)
+        hub.bind(asyncio.get_running_loop())
+
+        async def body():
+            loop = asyncio.get_running_loop()
+            cursor, started = after, loop.time()
+            last_frame = last_auth = started
+            try:
+                yield frame(comment="chintu event stream", retry=2000) + frame(event="ready", data={
+                    "cursor": cursor, "heartbeat_seconds": heartbeat, "max_seconds": lifetime})
+                while not ticket.evicted:
+                    now = loop.time()
+                    if now - started >= lifetime:
+                        break  # Recycle: the client reconnects at once from its last event ID.
+                    if now - last_auth >= heartbeat:
+                        try:
+                            store.authenticate(token)  # A revoked or expired phone loses its stream too.
+                        except ApiError:
+                            break
+                        last_auth = now
+                    page = store.events_page(cursor, 100, task_id, client_id)
+                    for event in page["events"]:
+                        yield frame(event=event["kind"], data=event, event_id=event["event_id"])
+                    cursor = page["next_cursor"]
+                    if page["events"]:
+                        last_frame = now
+                        if page["has_more"]:
+                            continue
+                    elif now - last_frame >= heartbeat:
+                        yield frame(comment="keepalive")
+                        last_frame = now
+                    # Commits in this process wake the stream at once; the timeout catches other writers.
+                    await hub.wait(min(settings.stream_check_seconds, heartbeat - (now - last_frame),
+                                       lifetime - (now - started)))
+            finally:
+                streams.close(ticket)
+
+        return StreamingResponse(body(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     async def mutation(request, task_id, operation, schema):
         task_id = identifier(task_id)
