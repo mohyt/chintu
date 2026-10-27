@@ -32,13 +32,40 @@ All enrolled clients belong to the one configured owner and may access that owne
 | `GET /api/v1/tasks` | Page through current task snapshots | M4 |
 | `GET /api/v1/tasks/{task_id}` | Get current state, result, or pending input | M4 |
 | `GET /api/v1/events` | Fetch ordered events after a cursor | M4 |
+| `GET /api/v1/events/stream` | Push the same events as server-sent events while connected | Event push |
 | `POST /api/v1/tasks/{task_id}/messages` | Follow up in the same idle provider session | M4/M6 |
 | `POST /api/v1/tasks/{task_id}/cancel` | Request cancellation; return current state | M4/M6 |
 | `POST /api/v1/tasks/{task_id}/inputs/{request_id}/answer` | Answer an ordinary clarification | M6 |
 | `POST /api/v1/tasks/{task_id}/approvals/{request_id}/decision` | Allow/deny the exact recorded action | M6 |
 | `GET /api/v1/artifacts/{artifact_id}` | Retrieve an authorized result artifact | M6 |
+| `POST /api/v1/conversations` | Start a conversation pinned to a workspace folder, agent and profile (idempotent on `conversation_id`) | Conversations |
+| `GET /api/v1/conversations` | Page through conversations, most recently active first | Conversations |
+| `GET /api/v1/conversations/{conversation_id}` | Read one conversation | Conversations |
+| `PATCH /api/v1/conversations/{conversation_id}` | Rename a conversation | Conversations |
+| `DELETE /api/v1/conversations/{conversation_id}` | Archive an idle conversation | Conversations |
+| `GET /api/v1/conversations/{conversation_id}/tasks` | Turns of one conversation, oldest first | Conversations |
+| `GET /api/v1/directories` | Subfolders of a registered workspace, for choosing a working directory | Conversations |
+| `GET /api/v1/tools` | Tools, MCP servers and skills under one profile | Conversations |
 
 M2's echo reply is explicitly a test reply. M4 can implement lifecycle behavior with a scripted adapter; real-provider capability claims require M3/M6 evidence. Unimplemented routes must fail explicitly rather than return invented success.
+
+## Event push
+
+`GET /api/v1/events/stream` is a server-sent-events (`text/event-stream`) view of `GET /api/v1/events` on the same private HTTPS origin, with the same protocol header and bearer token. It replays every event after `after` (or the `Last-Event-ID` header, which wins), then sends each new event the moment its transaction commits: `id: <event_id>`, `event: <kind>` and one `data:` line holding the unchanged `Event` envelope. The first frames are `retry: 2000` and `event: ready` with `{cursor, heartbeat_seconds, max_seconds}`; a `: keepalive` comment follows any 15 seconds without other frames. `task_id` narrows the stream to one task, as on the polling route.
+
+The gateway ends a stream after 15 minutes (`max_seconds` may ask for sooner), when the credential is revoked or expires (checked every heartbeat), or when the same client opens a fourth stream (its oldest closes). It refuses beyond 32 open streams with `503` (`retryable`). A cursor ahead of the server is `400 invalid_cursor` before any frame. Commits in the gateway process wake streams at once; a five-second check also catches events written by other processes. Shutdown gives open streams three seconds.
+
+The stream never replaces polling. Clients keep their persisted cursor, reconnect from the last event ID with jittered exponential backoff, treat `404` (an older gateway), `400` and `401` as "poll only", and keep polling at a long interval as a safety net while the stream is live. Tailscale Serve is a Go reverse proxy, which flushes `text/event-stream` responses immediately; that is expected, not yet measured through Serve on a device, and the heartbeat plus polling fallback cover a proxy that buffers.
+
+## Conversations, working directories and tools
+
+A conversation groups tasks that continue one agent session. `POST /api/v1/conversations` takes a client-generated `conversation_id`, `project_id`, `provider`, `execution_profile`, an optional `working_directory` relative to the registered workspace (empty for the root) and an optional `title`. It returns `201` with `{conversation, replayed: false}`; repeating it with the same workspace, agent, profile and folder returns `200` with `replayed: true` (the title is not compared, because the first turn or a rename may set it). Different content, or another client's ID, returns `409 idempotency_conflict`. A folder outside the workspace (absolute, `~`, `..`, or a symlink that leaves it) returns `422`; a missing folder or a file returns `404`.
+
+`POST /api/v1/tasks` with a `conversation_id` adds a turn. The task must use the conversation's project, provider and profile, or the gateway returns `409 invalid_state` ("start a new one"); the same applies to an archived conversation or one whose folder no longer exists. An unknown `conversation_id` creates a conversation at the workspace root, titled from the first instruction. Another client's conversation is `404`. The turn's snapshot carries the conversation's current `provider_session_id`, refreshed when the worker claims it.
+
+A `Conversation` reports `state` (`working` while any turn is unfinished), `turns`, `last_task_id`, a bounded `last_text` (latest result summary or instruction) and timestamps. Lists are ordered by `updated_at` and paged with an opaque cursor. `DELETE` archives only an idle conversation; archived conversations disappear from the list and accept no turns, while their tasks stay in history.
+
+`GET /api/v1/directories?project_id=…&path=…` lists visible subfolders (hidden folders and links leaving the workspace are omitted; links inside it report their target path), the folder's `parent` (`null` at the root), and `truncated` beyond 500 entries. `GET /api/v1/tools?project_id=…&execution_profile=…&working_directory=…` returns a `ToolCatalog`: `tools` (`builtin` or `mcp` with its `server`), `mcp_servers` with connection status and tool counts, `skills`, a `source` (`static` for fixed profile lists, `probe` when the agent was asked, `cached` for a recent probe or the last session's tool list) and a `reason` when the list is partial. The profile must be enabled for the project and runtime, otherwise `501`.
 
 ## Computer discovery and switching
 
@@ -114,6 +141,8 @@ Follow-up, answer, approval, and cancel operations carry a `message_id` UUID. Re
 ## State and result semantics
 
 States are `queued`, `running`, `waiting_for_input`, `cancelling`, `succeeded`, `failed`, `cancelled`, and `interrupted`. `interrupted` requires reconciliation and never automatically launches another attempt. State transitions follow [02-architecture.md](02-architecture.md). Every stored task event increments `task_version`; the event and snapshot change commit together. Cancellation acknowledgment does not prove the worker stopped. A committed success is never overwritten by a late cancel.
+
+Text events stream a run as it happens: `progress` names each tool step, `output_delta` carries the next piece of reply text while the agent writes it, and `output` carries each finished message (bounded to 2,000 characters). Concatenating a task's `output_delta` payloads up to the next `output` or `progress` event gives the full message, which may be longer than the bounded `output` or the result `summary`; clients that do not stream may ignore deltas. One attempt may store at most 1,500 text events and 512 KiB of text payload; beyond that the worker stops the attempt as `interrupted`, so adapters keep their own lower stream budget.
 
 Snapshots expose task/attempt/provider-session identity, state/version, timestamps, optional result, and optional pending input. Results include a concise `summary`, bounded `speech_text`, artifact references, known partial effects, and an optional structured error. Speech must agree with the recorded state. Ordinary questions and approval requests have distinct kinds; approval decisions bind request, task, attempt, action digest, scope, and expiry. No spoken answer or model output can expand authority.
 

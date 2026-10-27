@@ -73,6 +73,10 @@ A cellular handover disconnects the phone. The desktop continues accepted jobs. 
 | FR-17 | Discover visible Tailscale computers and save per-host pairing and voice aliases | V1 | Discovery is authenticated; each host has isolated credentials, cursor, draft and pending request |
 | FR-18 | Handle “Chintu, connect me to NAME” and “Chintu, switch to NAME” locally | V1 | Exact unique name/alias resolves; successful authenticated connection precedes spoken confirmation; failed/ambiguous switches preserve destination |
 | FR-19 | Present Chintu as an animated conversational companion | V1 | Orb follows actual recognition/TTS lifecycle, text stays readable, and open-app hands-free pauses for playback/review and stops on background |
+| FR-20 | Keep voice and chat turns in one conversation that resumes the same agent session until the owner starts a new one | V1 | Second turn resumes the first turn's provider session; “New chat” or “Chintu, new chat” starts a fresh session; voice and typed turns land in the same thread |
+| FR-21 | Offer a chat view of conversations on each computer: list, open, continue, stop a running turn, archive | V1 | Chats list ordered by last activity; thread streams every tool step and the full reply text while a turn runs and keeps them afterwards; archived chats leave the list and refuse new turns |
+| FR-22 | Choose a working directory inside a registered workspace for each conversation, by touch or by voice | V1 | Folder picker and “Chintu, new chat in FOLDER” resolve only folders inside the workspace; the agent runs and is confined there; the folder stays fixed for the conversation |
+| FR-23 | Show which tools, MCP servers and skills the agent can use in the current conversation | V1 | Confined profiles list their fixed tools; `desktop` reports live MCP server status, their tools and skills, or says why only a fallback is shown |
 
 ## Quality requirements
 

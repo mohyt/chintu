@@ -59,6 +59,22 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(continued[0].provider_session_id, session)
         self.assertEqual(events[-1].payload["partial_effects"], [])
 
+    async def test_scripted_tool_catalog_is_empty_and_explained(self):
+        catalog = await ScriptedAdapter().tools("/nowhere", "inspect")
+        self.assertEqual((catalog["source"], catalog["tools"], catalog["mcp_servers"], catalog["skills"]),
+                         ("static", [], [], []))
+        self.assertIn("no tools", catalog["reason"])
+
+    def test_tool_catalog_bounds_and_deduplicates(self):
+        from chintu_adapters.types import tool_catalog
+        catalog = tool_catalog("probe", [{"name": "Read"}, {"name": "Read"}, {"name": "  "}, {"name": "x" * 300, "kind": "mcp"}],
+                               [{"name": "s", "status": "weird", "tools": -1}, {"status": "connected"}],
+                               [{"name": "a\nb", "description": "d" * 900}, {"description": "nameless"}])
+        self.assertEqual([tool["name"] for tool in catalog["tools"]], ["Read", "x" * 200])
+        self.assertEqual(catalog["tools"][1]["kind"], "mcp")
+        self.assertEqual(catalog["mcp_servers"], [{"name": "s", "status": "unknown", "tools": 0}])
+        self.assertEqual(catalog["skills"], [{"name": "a b", "description": "d" * 500}])
+
     async def test_scripted_fail_and_interrupt(self):
         adapter = ScriptedAdapter()
         for text, expected in (("[fail]", "failed"), ("[interrupt]", "interrupted")):

@@ -142,6 +142,8 @@ Pair each computer separately. After the first one, the other computers on your 
 ## Using Chintu
 
 - Tap the mic and speak. Chintu sends the final transcript to the selected computer and speaks the reply. The orb shows what is happening: listening, thinking (while the computer works) and speaking.
+- **Chats remember.** Everything you say or type joins the current chat, and the agent keeps the context of that chat: follow-ups like "and the one before?" work. Tap the chat name under the computer selector (or hold the mic) to see the thread: every step the agent takes and its full reply stream in as it works. Type there, stop a running request, or tap a reply to hear it again.
+- **New chat** (＋ on the home screen or in the chat, or say "Chintu, new chat") starts a fresh session. Pick the folder the agent works in; say "Chintu, new chat in Downloads" to choose one by name. **Chats** lists earlier conversations on that computer, and **Tools** shows the tools, MCP servers and skills the agent can use in the current chat.
 - **Stop speaking** stops the audio only. The task on the computer keeps running.
 - **Note mode** (✎ on the home screen) dictates into a Markdown note on the computer (by default `~/Documents/Chintu Notes`). Tap ✎ again to finish; Chintu confirms the word count.
 - **Quiet mode** (Settings) mutes spoken output and queues instructions; read the results in **Activity** (☰ on the home screen).

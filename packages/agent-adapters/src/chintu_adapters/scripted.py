@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from typing import AsyncIterator
 
-from .types import AdapterCapabilities, AdapterEvent, TaskCommand, bounded_text, result
+from .types import AdapterCapabilities, AdapterEvent, TaskCommand, bounded_text, result, tool_catalog
 
 
 class ScriptedAdapter:
@@ -44,6 +44,9 @@ class ScriptedAdapter:
                 yield AdapterEvent("succeeded", result(summary), session)
         finally:
             self._running.pop(command.attempt_id, None)
+
+    async def tools(self, project_path: str, execution_profile: str) -> dict:
+        return tool_catalog("static", reason="The scripted fixture has no tools; it only echoes instructions.")
 
     async def cancel(self, attempt_id: str) -> None:
         signal = self._running.get(attempt_id)

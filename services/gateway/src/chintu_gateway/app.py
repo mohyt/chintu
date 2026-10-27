@@ -1,3 +1,4 @@
+import asyncio
 import os
 import secrets
 import sqlite3
@@ -9,11 +10,12 @@ from pathlib import Path
 from uuid import UUID
 
 from chintu_adapters import AdapterCapabilities, RuntimeEvidence
+from chintu_adapters.types import tool_catalog
 
 import logging
 
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
@@ -25,6 +27,8 @@ from .manager import Manager
 from .store import Store
 from .systems import TailscaleDiscovery
 from . import pairing_page
+from . import workspace as workspaces
+from .stream import EventHub, StreamRegistry, frame
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,10 @@ class Settings:
     login_method: str | None = None
     notes_dir: Path | None = None
     token_ttl_days: int = 30
+    # Event stream: heartbeat keeps proxies and the phone's read timeout alive; streams are recycled after max seconds.
+    stream_heartbeat_seconds: float = 15
+    stream_max_seconds: float = 900
+    stream_check_seconds: float = 5
 
 
 DEFAULT_PORT = 8765
@@ -158,12 +166,15 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
                   project_paths={key: value["path"] for key, value in settings.projects.items()},
                   token_ttl_days=settings.token_ttl_days)
     local_secret = write_local_secret(settings)
+    hub, streams = EventHub(), StreamRegistry()
+    store.listeners.append(hub.notify)
     pair_limiter = RateLimiter()
     manager = Manager(store, contract, adapter, settings.projects)
     discovery = systems_discovery if systems_discovery is not None else TailscaleDiscovery()
 
     @asynccontextmanager
     async def lifespan(app):
+        hub.bind(asyncio.get_running_loop())
         if settings.enable_worker:
             await manager.start()
         try:
@@ -176,6 +187,7 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     app.add_middleware(BodyLimit)
     app.state.store, app.state.manager, app.state.contract = store, manager, contract
     app.state.local_secret = local_secret
+    app.state.hub, app.state.streams = hub, streams
 
     @app.exception_handler(ApiError)
     async def api_error(request, error):
@@ -415,6 +427,80 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     async def get_task(request: Request, task_id: str):
         return store.get(identifier(task_id), request.state.client_id)
 
+    # --- Conversations: voice and chat share one agent session and working directory per conversation. ---
+    @api.post("/conversations")
+    async def create_conversation(request: Request):
+        value = await body(request, "ConversationCreate")
+        conversation, replayed = store.create_conversation(request.state.client_id, value, validate_capability)
+        result = contract.validate("ConversationCreated", {"conversation": conversation, "replayed": replayed})
+        return JSONResponse(result, 200 if replayed else 201)
+
+    @api.get("/conversations")
+    async def list_conversations(request: Request):
+        limit = integer(request.query_params.get("limit", "20"), 1, 100)
+        cursor = request.query_params.get("cursor")
+        if cursor is not None and len(cursor) > 512:
+            raise ApiError(422, "invalid_request", "Conversation cursor is too long.")
+        return contract.validate("ConversationsPage", store.conversations_page(request.state.client_id, limit, cursor))
+
+    @api.get("/conversations/{conversation_id}")
+    async def get_conversation(request: Request, conversation_id: str):
+        return contract.validate("Conversation", store.conversation(request.state.client_id, identifier(conversation_id)))
+
+    @api.patch("/conversations/{conversation_id}")
+    async def rename_conversation(request: Request, conversation_id: str):
+        conversation_id = identifier(conversation_id)
+        value = await body(request, "ConversationUpdate")
+        if not value["title"].strip():
+            raise ApiError(422, "invalid_request", "A conversation title cannot be blank.")
+        return contract.validate("Conversation", store.rename_conversation(
+            request.state.client_id, conversation_id, value["title"]))
+
+    @api.delete("/conversations/{conversation_id}", status_code=204)
+    async def archive_conversation(request: Request, conversation_id: str):
+        store.archive_conversation(request.state.client_id, identifier(conversation_id))
+        return Response(status_code=204)
+
+    @api.get("/conversations/{conversation_id}/tasks")
+    async def conversation_tasks(request: Request, conversation_id: str):
+        conversation_id = identifier(conversation_id)
+        store.conversation(request.state.client_id, conversation_id)
+        limit = integer(request.query_params.get("limit", "20"), 1, 100)
+        cursor = request.query_params.get("cursor")
+        if cursor is not None and len(cursor) > 512:
+            raise ApiError(422, "invalid_request", "Task cursor is too long.")
+        return store.tasks_page(limit, cursor, request.state.client_id, conversation_id)
+
+    def registered_root(project_id):
+        if not isinstance(project_id, str) or project_id not in settings.projects:
+            raise ApiError(404, "not_found", "Registered project not found.")
+        return store.project_paths.get(project_id, "project:" + project_id)
+
+    @api.get("/directories")
+    async def directories(request: Request):
+        project_id = request.query_params.get("project_id")
+        root = registered_root(project_id)
+        found = workspaces.listing(root, request.query_params.get("path", ""))
+        return contract.validate("Directories", {"project_id": project_id, **found})
+
+    @api.get("/tools")
+    async def tools(request: Request):
+        project_id, profile = request.query_params.get("project_id"), request.query_params.get("execution_profile")
+        root = registered_root(project_id)
+        if adapter is None:
+            raise unavailable()
+        capability = adapter.capabilities()
+        if (not capability.available or profile not in capability.execution_profiles
+                or profile not in settings.projects[project_id]["execution_profiles"]):
+            raise unavailable()
+        _, path = workspaces.resolve(root, request.query_params.get("working_directory", ""))
+        if hasattr(adapter, "tools"):
+            catalog = await adapter.tools(str(path), profile)
+        else:
+            catalog = tool_catalog("static", reason="This agent does not report its tools.")
+        return contract.validate("ToolCatalog", {"provider": capability.provider, "project_id": project_id,
+                                                 "execution_profile": profile, **catalog})
+
     @api.get("/events")
     async def events(request: Request):
         after = integer(request.query_params.get("after", "0"))
@@ -422,6 +508,61 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
         task_id = request.query_params.get("task_id")
         return store.events_page(after, limit, identifier(task_id) if task_id is not None else None,
                                  request.state.client_id)
+
+    @api.get("/events/stream")
+    async def event_stream(request: Request):
+        """Server-sent events: replay after the cursor, then push each event as it commits."""
+        client_id = request.state.client_id
+        token = request.headers.get("Authorization", "")[7:]
+        # Last-Event-ID is the standard SSE resume point and wins over the query cursor.
+        resume = request.headers.get("Last-Event-ID")
+        after = integer(resume if resume is not None else request.query_params.get("after", "0"))
+        task_id = request.query_params.get("task_id")
+        task_id = identifier(task_id) if task_id is not None else None
+        lifetime = settings.stream_max_seconds
+        if request.query_params.get("max_seconds") is not None:
+            lifetime = min(lifetime, integer(request.query_params["max_seconds"], 1, 86400))
+        heartbeat = settings.stream_heartbeat_seconds
+        store.events_page(after, 1, task_id, client_id)  # An impossible cursor fails here, before the 200.
+        ticket = streams.open(client_id)
+        hub.bind(asyncio.get_running_loop())
+
+        async def body():
+            loop = asyncio.get_running_loop()
+            cursor, started = after, loop.time()
+            last_frame = last_auth = started
+            try:
+                yield frame(comment="chintu event stream", retry=2000) + frame(event="ready", data={
+                    "cursor": cursor, "heartbeat_seconds": heartbeat, "max_seconds": lifetime})
+                while not ticket.evicted:
+                    now = loop.time()
+                    if now - started >= lifetime:
+                        break  # Recycle: the client reconnects at once from its last event ID.
+                    if now - last_auth >= heartbeat:
+                        try:
+                            store.authenticate(token)  # A revoked or expired phone loses its stream too.
+                        except ApiError:
+                            break
+                        last_auth = now
+                    page = store.events_page(cursor, 100, task_id, client_id)
+                    for event in page["events"]:
+                        yield frame(event=event["kind"], data=event, event_id=event["event_id"])
+                    cursor = page["next_cursor"]
+                    if page["events"]:
+                        last_frame = now
+                        if page["has_more"]:
+                            continue
+                    elif now - last_frame >= heartbeat:
+                        yield frame(comment="keepalive")
+                        last_frame = now
+                    # Commits in this process wake the stream at once; the timeout catches other writers.
+                    await hub.wait(min(settings.stream_check_seconds, heartbeat - (now - last_frame),
+                                       lifetime - (now - started)))
+            finally:
+                streams.close(ticket)
+
+        return StreamingResponse(body(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     async def mutation(request, task_id, operation, schema):
         task_id = identifier(task_id)

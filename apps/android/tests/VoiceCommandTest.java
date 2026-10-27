@@ -20,6 +20,13 @@ public final class VoiceCommandTest {
         check(text.equals(parsed.utterance()), "Preserve original instruction: " + text);
     }
 
+    private static void fresh(String text, String folder) {
+        VoiceCommand parsed = VoiceCommand.parse(text);
+        check(parsed.kind() == VoiceCommand.Kind.NEW_CONVERSATION, "Expected a new conversation: " + text);
+        check(folder == null ? parsed.folderName() == null : folder.equals(parsed.folderName()), "Wrong folder: " + text);
+        check(parsed.destinationName() == null, "A new conversation names no computer: " + text);
+    }
+
     private static void match(String name, List<DestinationMatcher.Destination> saved,
                               DestinationMatcher.Status status, String id) {
         DestinationMatcher.Match result = DestinationMatcher.match(name, saved);
@@ -38,6 +45,26 @@ public final class VoiceCommandTest {
                 "Chintu switch to", "Chintu run the tests", "Chintu please connect me to mac", "Chintu stop listening")) {
             command(text, VoiceCommand.Kind.UNKNOWN_COMMAND, null);
         }
+        // A new conversation, optionally in a named folder; nothing else in the sentence becomes a task.
+        fresh("Chintu, new chat", null);
+        fresh("Chintu new conversation.", null);
+        fresh("CHINTU: start a new session", null);
+        fresh("Chintu start new chat", null);
+        fresh("Chintu, start over", null);
+        fresh("Chintu, new chat in Downloads", "downloads");
+        fresh("Chintu new conversation in the docs folder", "docs");
+        fresh("Chintu, start a new chat inside my Chintu-Notes directory", "chintu notes");
+        fresh("Chintu new session for Project Alpha", "project alpha");
+        for (String text : Arrays.asList("Chintu new chat in", "Chintu new chat in the folder", "Chintu new chats",
+                "Chintu a new chat", "Chintu new chat please")) {
+            command(text, VoiceCommand.Kind.UNKNOWN_COMMAND, null);
+        }
+        command("Start a new chat in Downloads", VoiceCommand.Kind.TASK, null);
+        DestinationMatcher.Destination notes = new DestinationMatcher.Destination("Documents/Chintu Notes", "Chintu Notes", "");
+        DestinationMatcher.Destination docs = new DestinationMatcher.Destination("work/docs", "docs", "");
+        match("chintu notes", Arrays.asList(notes, docs), DestinationMatcher.Status.MATCHED, "Documents/Chintu Notes");
+        match(VoiceCommand.parse("Chintu new chat in my docs folder").folderName(), Arrays.asList(notes, docs),
+                DestinationMatcher.Status.MATCHED, "work/docs");
         // Keyword inside ordinary speech and homonyms do not trigger routing.
         for (String text : Arrays.asList("Explain Chintu's architecture.", "Connect me to cobra ubuntu",
                 "Chintoo connect me to cobra ubuntu", "Chintuish switch to mac", "Hey Chintu switch to mac")) {

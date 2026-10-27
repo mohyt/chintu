@@ -87,6 +87,13 @@ class ClientStore(context: Context, gateway: String) : SubmissionGuard.Store {
     var draft: String
         get() = synchronized(stateLock) { submissionState().optString("draft", prefs.getString("draft", "").orEmpty()) }
         set(value) { synchronized(stateLock) { saveSubmissionState(submissionState().put("draft", value)) } }
+    /**
+     * The conversation that new voice and chat turns join on this computer: its ID, workspace, agent, profile,
+     * working directory and title, plus whether the computer has acknowledged it. Null starts a fresh one.
+     */
+    var conversation: JSONObject?
+        get() = prefs.getString("conversation", null)?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+        set(value) { commit { if (value == null) remove("conversation") else putString("conversation", value.toString()) } }
     fun choice(key: String): String = prefs.getString("choice_$key", "").orEmpty()
     fun choose(key: String, value: String) { commit { putString("choice_$key", value) } }
     private fun commit(edit: android.content.SharedPreferences.Editor.() -> Unit) {

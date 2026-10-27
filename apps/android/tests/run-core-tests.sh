@@ -7,3 +7,7 @@ JAVAC=${JAVA_HOME:+$JAVA_HOME/bin/}javac
 JAVA=${JAVA_HOME:+$JAVA_HOME/bin/}java
 "$JAVAC" -d "$TEST_DIR" app/src/main/java/ai/chintu/core/*.java tests/CoreTest.java
 "$JAVA" -cp "$TEST_DIR" CoreTest
+"$JAVAC" -d "$TEST_DIR" app/src/main/java/ai/chintu/core/ChatTranscript.java tests/ChatTranscriptTest.java
+"$JAVA" -cp "$TEST_DIR" ChatTranscriptTest
+"$JAVAC" -d "$TEST_DIR" app/src/main/java/ai/chintu/core/SseParser.java tests/SseParserTest.java
+"$JAVA" -cp "$TEST_DIR" SseParserTest

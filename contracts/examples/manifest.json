@@ -3,5 +3,7 @@
   "task-accepted.json": "TaskAccepted",
   "event-page.json": "EventsPage",
   "echo.json": "EchoResponse",
-  "error.json": "Error"
+  "error.json": "Error",
+  "conversation-created.json": "ConversationCreated",
+  "tool-catalog.json": "ToolCatalog"
 }
