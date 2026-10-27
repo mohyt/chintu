@@ -1,0 +1,19 @@
+{
+  "provider": "claude-agent",
+  "project_id": "home",
+  "execution_profile": "desktop",
+  "source": "probe",
+  "tools": [
+    {"name": "Read", "kind": "builtin", "server": null, "description": "Read a file"},
+    {"name": "Bash", "kind": "builtin", "server": null, "description": "Run a shell command"},
+    {"name": "mcp__github__get_issue", "kind": "mcp", "server": "github", "description": "Get an issue"}
+  ],
+  "mcp_servers": [
+    {"name": "github", "status": "connected", "tools": 1},
+    {"name": "calendar", "status": "needs-auth", "tools": 0}
+  ],
+  "skills": [
+    {"name": "review", "description": "Review the current diff"}
+  ],
+  "reason": null
+}

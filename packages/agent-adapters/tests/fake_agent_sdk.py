@@ -122,6 +122,22 @@ class ClaudeSDKClient:
         self.disconnected = True
         self.connected = False
 
+    async def get_mcp_status(self) -> dict:
+        if not self.connected:
+            raise CLIConnectionError("Not connected. Call connect() first.")
+        return {"mcpServers": [
+            {"name": "github", "status": "connected", "scope": "user",
+             "tools": [{"name": "get_issue", "description": "Get an issue"}, {"name": "list_prs"}]},
+            {"name": "calendar", "status": "needs-auth", "scope": "claudeai"},
+            {"name": "odd", "status": "rebooting"},
+        ]}
+
+    async def get_server_info(self) -> dict | None:
+        if not self.connected:
+            raise CLIConnectionError("Not connected. Call connect() first.")
+        return {"commands": [{"name": "review", "description": "Review the current diff"},
+                             {"name": "compact", "description": ""}, {"description": "nameless"}]}
+
     async def receive_response(self):
         session = self.options.kwargs.get("resume") or SESSION
         text = self.prompt or ""
@@ -129,7 +145,8 @@ class ClaudeSDKClient:
         if text == "[no-init]":
             yield ResultMessage("success", False, session, "Reply without an init message.")
             return
-        yield SystemMessage("init", {"session_id": session, "model": "fake-model", "tools": ["Read"]})
+        yield SystemMessage("init", {"session_id": session, "model": "fake-model",
+                                     "tools": ["Read", "Bash", "mcp__github__get_issue"]})
         if text == "[die]":
             return
         if text == "[raise]":

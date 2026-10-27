@@ -98,14 +98,17 @@ class Manager:
                     or snapshot["execution_profile"] not in project["execution_profiles"]):
                 raise ValueError("Queued task no longer has an available execution profile")
             workspace = self.store.workspace_for_task(task_id)
-            if workspace != str(Path(project["path"]).resolve()):
+            # A conversation may narrow the run to a folder inside the workspace, never anywhere else.
+            root = Path(project["path"]).resolve()
+            if (str(Path(workspace).resolve()) != workspace or not Path(workspace).is_dir()
+                    or not Path(workspace).is_relative_to(root)):
                 raise ValueError("Registered workspace changed after task acceptance")
             command = TaskCommand(task_id, attempt_id, workspace, instruction,
                                   snapshot["execution_profile"], snapshot["provider_session_id"])
             # INFO carries identifiers and sizes only; instruction/progress/output text is DEBUG.
-            log.info("task %s start provider=%s profile=%s project=%s resume=%s instruction_words=%d",
+            log.info("task %s start provider=%s profile=%s project=%s conversation=%s resume=%s instruction_words=%d",
                      task_id[:8], snapshot["provider"], snapshot["execution_profile"], snapshot["project_id"],
-                     bool(snapshot["provider_session_id"]), _words(instruction))
+                     (snapshot.get("conversation_id") or "-")[:8], bool(snapshot["provider_session_id"]), _words(instruction))
             log.debug("task %s instruction=%r", task_id[:8], _preview(instruction, 160))
             iterator = self.adapter.run(command)
             async for event in iterator:
