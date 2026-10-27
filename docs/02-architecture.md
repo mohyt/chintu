@@ -99,7 +99,7 @@ An explicit follow-up to a succeeded task queues a new attempt in the same suppo
 | --- | --- |
 | Client | Client ID, owner, credential verifier, enrollment/revocation time, last seen |
 | Project | Project ID, canonical workspace path, allowed execution profile, configured tools |
-| Conversation | Conversation ID, selected project/task, voice configuration, retained summary |
+| Conversation | Conversation ID, owning client, project, provider, execution profile, working directory (relative and canonical absolute), latest provider session ID, title, activity time, archived flag |
 | Task | Task ID, provider, project, instruction, scope, current state, timestamps, task version |
 | Submission | Owner/client scope, idempotency key, canonical request digest, task ID |
 | Attempt | Attempt ID, task ID, provider session/thread ID, worker identity, start/end, recovery status |
@@ -107,6 +107,12 @@ An explicit follow-up to a succeeded task queues a new attempt in the same suppo
 | Input request | Request ID, task/attempt, question or action digest, scope, expiry, resolution |
 | Artifact | Artifact ID, task, relative storage path, MIME type, size, creation time |
 | Phone speech session | Client-local listening/playback state and audio routes; server retains conversation/task identity, not audio |
+
+### Conversations
+
+A conversation is the unit voice and chat share (D22). Each instruction, spoken or typed, is a task submitted with a `conversation_id`; the gateway takes the conversation's latest provider session ID when the worker claims the turn and passes it as `resume`, and every `started` event updates it. Turns therefore continue one agent session in order, and the global single worker keeps them from overlapping. Project, provider, execution profile and working directory are fixed for the conversation's life, because Claude Code stores sessions per working directory and a profile change would change authority mid-session; changing any of them starts a new conversation. A `conversation_id` the gateway has not seen starts a conversation at the workspace root, which keeps older clients working.
+
+The working directory is a folder inside a registered workspace, resolved after following symlinks and `..`; it becomes the task's workspace path, so `inspect` and `develop` confinement narrows to it. Quarantine after an uncertain real-provider outcome blocks every path that contains or lies inside the interrupted task's folder.
 
 Task provider and project remain fixed for an attempt. Explicit provider handoff creates a new task with a user-approved summary; it does not reuse another provider's opaque session identifier.
 

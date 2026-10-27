@@ -150,6 +150,11 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | Inspect phone-to-Ubuntu request/event payloads | Text/task data only; no microphone audio | FR-01, NFR-08 |
 | Finish a dictated note | One OKF `Chintu Note` file (frontmatter `type`, `id` = file stem, `finished_at`, `generated`, `sources`) in a bundle with `index.md` and `log.md`; an empty note writes nothing | D22 |
 | Claude Agent SDK task per profile (`inspect`, `develop`, `desktop`), follow-up, cancel, SDK error, stream loss | Fake-SDK tests pass; `desktop` refused unless listed; one real inspect call recorded; permission prompts denied visibly | FR-05–06, FR-08–10, NFR-07 |
+| Two turns in one conversation, by voice and by chat | Second turn resumes the first turn's session in the conversation's folder; gateway tests pass; real two-turn recall on the phone pending | FR-20, FR-21 |
+| New chat by button, by “Chintu, new chat” and after a Settings change | Fresh conversation and session; old chat stays listed; voice parser tests pass; device acceptance pending | FR-20, FR-22 |
+| Working directory outside the workspace (`..`, absolute, `~`, escaping symlink), missing, or deleted after creation | `422`/`404` at creation; `409` on the next turn; worker never runs outside the registered workspace | FR-22, NFR-10 |
+| Quarantined folder and a conversation inside or above it | Turn refused until reconciliation; sibling folders still run | FR-22, NFR-03 |
+| Tools sheet for `inspect`, `develop` and `desktop` | Fixed lists for confined profiles; `desktop` probe lists MCP servers, tools and skills without sending a prompt; fallback states its reason | FR-23 |
 
 ## Requirement coverage
 
@@ -160,6 +165,7 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | FR-05–06 | M3 provider/fixture behavior; M4 project validation | M5 first provider; M6 both |
 | FR-07, FR-11 | M1 speech interruption; M4 outcome/event contracts | M5–M7 |
 | FR-08, FR-15 | M3 session identity; M4 durability/replay | M5–M7 |
+| FR-20–23 | Conversation, folder and tool-catalog gateway tests; voice command parser tests | Phone two-turn recall, folder picker and tools sheet on a real computer |
 | FR-09–10 | M3 runtime controls; M4 lifecycle/approval fixtures | M6–M7 real adapters |
 | FR-12 | Failure cases in M1–M4 | M5–M7 |
 | NFR-01–03 | M2 private access; M4 acceptance/deduplication/recovery | M5–M7 |

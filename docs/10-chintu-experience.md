@@ -14,7 +14,7 @@ A large, gently moving purple orb anchors the near-black home screen, following 
 - **Audio button:** call-style device picker, showing the selected route and connected communication devices. It refreshes automatically while open.
 - **Computer selector:** saved computers, aliases, pairing and Tailscale discovery in a bottom sheet.
 - **Settings gear:** voice preferences, foreground hands-free, automatic sending, workspace/agent/profile and task history in a bottom sheet.
-- **Keyboard button:** conversation sheet for typing, review/send/retry and full replies. A final transcript opens it automatically when review is required; accepted instructions return to the orb.
+- **Chat row:** under the computer selector, the current chat's title (tap to open it) and **＋ New chat**. Holding the mic opens the chat too. A final transcript opens it automatically when review is required.
 
 The launcher uses the same purple orb and the name Chintu. No fake computers or fabricated connected states are preloaded.
 
@@ -44,6 +44,17 @@ Choose workspace, provider, and permission profile separately for each computer.
 Tap the microphone, or explicitly enable **Hands-free while the app is open**. Hands-free uses successive bounded Android recognition turns, pausing for replies, connection operations, editing, and review. It is a foreground convenience, not a background wake-word engine. The app does not capture while speaking. A reply arriving during capture is held until capture ends rather than discarded or spoken over the user.
 
 Final ordinary speech becomes an editable draft. **Send finished voice instructions automatically** is a separate opt-in and resets when the app leaves the foreground. Partial results never submit. Typing stops capture so recognition cannot overwrite an edit. Both automatic sending and hands-free stop when the app closes, locks, or backgrounds; results remain on the computer. A local wake word ("Chintu", on-device Vosk) is available as an opt-in in Settings and works with the screen off; full duplex remains M8. See [the wake-word validation](validation/2026-10-17-wake-word.md).
+
+## Chats and sessions
+
+Voice and typing share one conversation per computer (D22). Each instruction is a turn of the current chat, and the agent resumes the same session, so "and what about the second one?" refers to the earlier answer. The chat sheet reads like a messaging app: your words on the right, replies on the left with live progress ("Reading release notes…") while a turn runs, a **Stop** link on a running turn, tap a reply to hear it, hold it to copy. The composer has its own mic; speaking while the chat is open adds to it, and voice keeps working there because the chat is a conversation surface, not a form.
+
+- **＋ New chat** starts a fresh agent session. Its sheet browses the workspace's folders; the chosen folder is where the agent works and, for `inspect` and `develop`, the only place it can reach. The folder stays fixed for the chat.
+- **Chats** lists the computer's conversations, most recent first, with their folder, profile and last line. Opening one also selects its workspace, agent and profile so the next message continues it. Hold a chat to archive it.
+- **Tools** lists what the agent can use in this chat: the fixed tool list of `inspect`/`develop`, or for `desktop` the built-in tools, each MCP server with its connection status and tools, and the skills Claude Code reports.
+- **By voice:** "Chintu, new chat" (also "new conversation", "new session", "start over") starts a fresh chat in the current folder; "Chintu, new chat in Downloads" picks a folder by its exact name at the top of the workspace or inside the current folder.
+
+Changing the workspace, agent or profile in Settings starts a new chat with the next message, because a session cannot change its authority or folder midway.
 
 ## Device acceptance
 

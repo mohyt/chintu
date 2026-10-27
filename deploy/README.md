@@ -53,6 +53,10 @@ Then validate without launching anything:
 | `develop` | `dontAsk` | Read, Glob, Grep, Edit, Write, MultiEdit, NotebookEdit, Bash | Hook: file paths inside the workspace; Bash text filter (below) | user and project |
 | `desktop` | `bypassPermissions` | All built-in tools and loaded MCP servers | None: works like a trusted Claude Code session | user and project |
 
+The workspace for a task is its conversation's working directory: the registered
+workspace itself or a folder inside it chosen on the phone. Confinement applies to that
+folder, so a chat started in `projects/site` cannot read its sibling `projects/notes`.
+
 `inspect` and `develop` register **no** bare `allowed_tools` entries, because the SDK
 auto-approves such entries before any callback runs. Instead a `PreToolUse` hook
 (`packages/agent-adapters/src/chintu_adapters/confinement.py`) decides every tool call;
