@@ -87,6 +87,15 @@ def write(path, frontmatter, body="", mode=0o600):
     os.replace(tmp, path)
 
 
+def write_in(folder, name, frontmatter, body="", mode=0o600):
+    """write() a file directly inside folder; refuses a name that would leave it (`..`, `/`)."""
+    base = os.path.realpath(folder)
+    path = os.path.realpath(os.path.join(base, name))
+    if not path.startswith(base + os.sep) or os.path.dirname(path) != base:
+        raise ValueError("note file name must stay inside the notes folder")
+    write(path, frontmatter, body, mode)
+
+
 def ensure_bundle(folder, title, description):
     """Create the bundle's `index.md` and `log.md` once; never rewrite them."""
     folder = Path(folder)

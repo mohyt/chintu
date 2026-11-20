@@ -77,6 +77,16 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(okf.notes_folder(None, db, {"DATA_HOME": str(base / "other")}, config), (base / "other").resolve() / "00-Inbox" / "Notes")
         self.assertEqual(okf.notes_folder(base / "mine", db, {"DATA_HOME": str(base / "other")}, config), base / "mine")
 
+    def test_note_file_stays_in_notes_folder(self):
+        from chintu_gateway import okf
+        folder = Path(self.temp.name) / "notes"
+        folder.mkdir()
+        for name in ("../escape.md", "sub/x.md", "/tmp/x.md"):
+            with self.assertRaises(ValueError):
+                okf.write_in(folder, name, {"type": "Note"}, "x")
+        okf.write_in(folder, "ok.md", {"type": "Note"}, "x")
+        self.assertTrue((folder / "ok.md").exists())
+
     def test_configured_notes_dir_is_used(self):
         folder = Path(self.temp.name) / "vault" / "Chintu Notes"
         app = create_app(Settings(Path(self.temp.name) / "db2.sqlite3", notes_dir=folder))
