@@ -46,6 +46,37 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(twice.status_code, 200)
         self.assertEqual(twice.json()["file"], value["file"])
 
+    def test_note_is_an_okf_file(self):
+        import yaml
+        note_id = self.client.post("/api/v1/notes", json={}, headers=self.headers).json()["note_id"]
+        self.client.post(f"/api/v1/notes/{note_id}/chunks", json={"text": 'Call "Ravi": 10am, then #review'}, headers=self.headers)
+        saved = self.client.post(f"/api/v1/notes/{note_id}/finish", json={}, headers=self.headers).json()
+        folder = self.database.parent / "notes"
+        text = (folder / saved["file"]).read_text()
+        self.assertTrue(text.startswith("---\n"))
+        end = text.index("\n---\n", 3)
+        fm, body = yaml.safe_load(text[4:end]), text[end + 5:]
+        self.assertEqual(fm["type"], "Chintu Note")
+        self.assertEqual(fm["id"], Path(saved["file"]).stem)
+        self.assertEqual(fm["words"], 5)
+        self.assertEqual(fm["sources"], [{"resource": "chintu://note/" + note_id, "title": "Voice note from Pixel"}])
+        self.assertEqual(set(fm["generated"]), {"by", "at"})
+        self.assertIn('Call "Ravi": 10am, then #review', body)
+        index = (folder / "index.md").read_text()
+        self.assertEqual(yaml.safe_load(index.split("---")[1]), {"okf_version": "0.2"})
+        self.assertTrue((folder / "log.md").exists())
+
+    def test_notes_folder_follows_data_home(self):
+        from chintu_gateway import okf
+        base = Path(self.temp.name)
+        config = base / "data.env"
+        db = base / "db.sqlite3"
+        self.assertEqual(okf.notes_folder(None, db, {}, config), db.resolve().parent / "notes")
+        config.write_text("# set by ataria-sync join\nDATA_HOME='" + str(base / "vault") + "'\n")
+        self.assertEqual(okf.notes_folder(None, db, {}, config), (base / "vault").resolve() / "00-Inbox" / "Notes")
+        self.assertEqual(okf.notes_folder(None, db, {"DATA_HOME": str(base / "other")}, config), (base / "other").resolve() / "00-Inbox" / "Notes")
+        self.assertEqual(okf.notes_folder(base / "mine", db, {"DATA_HOME": str(base / "other")}, config), base / "mine")
+
     def test_configured_notes_dir_is_used(self):
         folder = Path(self.temp.name) / "vault" / "Chintu Notes"
         app = create_app(Settings(Path(self.temp.name) / "db2.sqlite3", notes_dir=folder))

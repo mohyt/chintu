@@ -148,6 +148,7 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | Assistant playback enters the microphone | V1 stops playback before listening; no task from the assistant's own speech | FR-01, FR-11 |
 | Phone reconnects and receives old events | History restored without narrating stale progress or duplicating speech | FR-07–08 |
 | Inspect phone-to-Ubuntu request/event payloads | Text/task data only; no microphone audio | FR-01, NFR-08 |
+| Finish a dictated note | One OKF `Chintu Note` file (frontmatter `type`, `id` = file stem, `finished_at`, `generated`, `sources`) in a bundle with `index.md` and `log.md`; an empty note writes nothing | D22 |
 | Claude Agent SDK task per profile (`inspect`, `develop`, `desktop`), follow-up, cancel, SDK error, stream loss | Fake-SDK tests pass; `desktop` refused unless listed; one real inspect call recorded; permission prompts denied visibly | FR-05–06, FR-08–10, NFR-07 |
 
 ## Requirement coverage
