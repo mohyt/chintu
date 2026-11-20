@@ -59,7 +59,7 @@ The phone turns your speech into text and sends only the final transcript. The g
 
 ## Install
 
-Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases/latest). The latest release is v0.5.0.
+Packages are published on [GitHub Releases](https://github.com/mohyt/chintu/releases/latest). The latest release is v0.6.0.
 
 ### Phone (Android)
 
