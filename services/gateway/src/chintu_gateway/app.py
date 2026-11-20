@@ -24,7 +24,7 @@ from .errors import ApiError, unavailable
 from .manager import Manager
 from .store import Store
 from .systems import TailscaleDiscovery
-from . import pairing_page
+from . import okf, pairing_page
 
 
 @dataclass(frozen=True)
@@ -360,7 +360,7 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
         store.revoke(request.state.client_id)
         return Response(status_code=204)
 
-    notes_dir = Path(settings.notes_dir) if settings.notes_dir else Path(settings.database).resolve().parent / "notes"
+    notes_dir = okf.notes_folder(settings.notes_dir, settings.database)
 
     @api.post("/notes", status_code=201)
     async def create_note(request: Request):

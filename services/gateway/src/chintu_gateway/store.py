@@ -7,8 +7,9 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from . import okf
 from .errors import ApiError
 
 
@@ -206,12 +207,22 @@ class Store:
                 # Nothing was dictated: close the note without littering the folder with empty files.
                 db.execute("UPDATE notes SET finished_at=?, file=? WHERE note_id=?", (finished, "", note_id))
                 return {"note_id": note_id, "file": "", "words": 0, "finished_at": finished, "text": ""}
-            file_name = stamp.strftime("%Y-%m-%d-%H%M") + "-" + note_id[:8] + ".md"
-            folder = Path(notes_dir); folder.mkdir(parents=True, exist_ok=True)
-            body = "# Note " + stamp.strftime("%Y-%m-%d %H:%M") + "\n\n" + "\n\n".join(chunks) + "\n"
-            target = folder / file_name
-            target.write_text(body, encoding="utf-8")
-            os.chmod(target, 0o600)
+            # The file name is built from the parsed UUID, never from the request's text.
+            stem = stamp.strftime("%Y-%m-%d-%H%M") + "-" + UUID(row["note_id"]).hex[:8]
+            file_name = stem + ".md"
+            client = db.execute("SELECT name FROM clients WHERE client_id=?", (client_id,)).fetchone()
+            title = "Note " + stamp.strftime("%Y-%m-%d %H:%M")
+            at = stamp.isoformat(timespec="seconds")
+            frontmatter = {
+                "type": "Chintu Note", "id": stem, "title": title,
+                "created_at": row["created_at"], "finished_at": at,
+                "words": sum(len(c.split()) for c in chunks),
+                "generated": {"by": "process:chintu-gateway", "at": at},
+                "sources": [{"resource": "chintu://note/" + note_id,
+                             "title": "Voice note from " + (client["name"] if client else "phone")}],
+            }
+            okf.ensure_bundle(notes_dir, "Chintu Notes", "Voice notes dictated to Chintu, one OKF file per note.")
+            okf.write_in(notes_dir, file_name, frontmatter, "# " + title + "\n\n" + "\n\n".join(chunks))
             db.execute("UPDATE notes SET finished_at=?, file=? WHERE note_id=?", (finished, file_name, note_id))
         return {"note_id": note_id, "file": file_name, "words": sum(len(c.split()) for c in chunks),
                 "finished_at": finished, "text": "\n\n".join(chunks)[:4000]}

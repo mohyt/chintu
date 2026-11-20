@@ -8,6 +8,7 @@ from pathlib import Path
 from chintu_adapters import ClaudeAdapter, ClaudeAgentAdapter, CodexAdapter, RuntimeEvidence
 from chintu_adapters.agent_sdk import DEFAULT_MODEL, PROFILE_POLICIES
 
+from . import okf
 from .app import Settings
 from .auth_env import assert_auth_environment
 from .contract import Contract, DEFAULT_CONTRACT
@@ -102,10 +103,10 @@ class OperatorConfig:
         assert_auth_environment(AGENT_PROVIDER)
         extra = {key: runtime[key] for key in ("max_turns", "timeout_seconds", "persona") if runtime.get(key) is not None}
         from chintu_adapters.agent_sdk import DEFAULT_PERSONA
-        notes_dir = self.settings.notes_dir or Path(self.settings.database).resolve().parent / "notes"
+        notes_dir = okf.notes_folder(self.settings.notes_dir, self.settings.database)
         extra["persona"] = (extra.get("persona") or DEFAULT_PERSONA) + (
             f" Voice notes the owner dictates from the phone are saved, without any processing, as Markdown files in {notes_dir} "
-            "(newest by file name). When asked about their notes, read the relevant files there.")
+            "(newest by file name; YAML frontmatter on top, the dictated text below; index.md and log.md are not notes). When asked about their notes, read the relevant files there.")
         adapter = ClaudeAgentAdapter(runtime["executable"], model=runtime["model"],
                                      profiles=tuple(runtime["profiles"]),
                                      load_user_settings=runtime["load_user_settings"], **extra)
