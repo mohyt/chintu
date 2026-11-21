@@ -5,4 +5,4 @@ pyinstaller-hooks-contrib==2026.8
 altgraph==0.17.5
 macholib==1.16.4
 packaging==26.3
-setuptools==84.0.0
+setuptools==84.1.0
