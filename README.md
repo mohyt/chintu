@@ -181,7 +181,7 @@ To switch: on the home screen tap the gear (⚙) to open Settings, open the perm
 
 ## Ataria daily board
 
-Ataria is an optional part of Chintu that reads your sources (mail, calendar, work tools, news feeds, voice notes) on a schedule and builds a daily board: what needs you today, open todos, and a digest of what is worth knowing. The phone shows it behind the **✓** button when the selected computer has Ataria set up.
+Ataria is an optional part of Chintu that reads your sources (mail, calendar, work tools, news feeds, voice notes) on a schedule and builds a daily board: what needs you today, open todos, and a digest of what is worth knowing. The phone shows it behind the **✓** button when the selected computer has Ataria set up, and **Open the full dashboard** there (or **Open Ataria dashboard** in the tray) opens everything: the digest, Work, Finance, Kids, Growth, Home and past days.
 
 Everything personal it needs (your name and timezone, personal life and work kept apart, which agent and model runs each job, who gets which digest) lives only in `ataria.json` on your computer, readable by you alone; the code and prompts in this repository contain none of it. Set it up, or change your answers later, with:
 
@@ -190,7 +190,7 @@ chintu-desktop ataria init      # about you, personal life, work, and which agen
 chintu-desktop ataria doctor    # checks the profile, vault, agent sign-ins and secret references
 ```
 
-The installer never asks when a profile already exists: it runs `doctor` instead. To set up a new computer from a profile you already have, pass it to the installer (`… | bash -s -- --ataria-profile ~/ataria.json`); it is copied into place, readable by you alone, and no questions are asked. Otherwise it offers `init` on a first install. Ataria's design is in [docs/13-ataria.md](docs/13-ataria.md); in 0.7.0 test releases the scheduled jobs still come from the owner's existing setup and move into Chintu before 0.7.0.
+The installer never asks when a profile already exists: it runs `doctor` instead. To set up a new computer from a profile you already have, pass it to the installer (`… | bash -s -- --ataria-profile ~/ataria.json`); it is copied into place, readable by you alone, and no questions are asked. Otherwise it offers `init` on a first install. Ataria runs on one computer, and the others only show its dashboard. On a computer that should not run it, install with `--no-ataria-runtime`, then pair it with the one that does: `ssh that-computer chintu-desktop pairing-code | chintu-desktop ataria connect -`. Ataria's design is in [docs/13-ataria.md](docs/13-ataria.md); in 0.7.0 test releases the scheduled jobs still come from the owner's existing setup and move into Chintu before 0.7.0.
 
 ## Troubleshooting
 

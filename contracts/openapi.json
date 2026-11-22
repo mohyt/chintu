@@ -4702,6 +4702,92 @@
           }
         }
       }
+    },
+    "/api/v1/ataria/link": {
+      "post": {
+        "operationId": "createAtariaDashboardLink",
+        "summary": "A one-time link that opens the Ataria dashboard in a browser",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Chintu-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol version. Unsupported/missing versions return 426."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtariaDashboardLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Queue full or rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Ataria engine answered with something the gateway could not use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Ataria is not set up on this computer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Returns a path on this gateway, valid once for 60 seconds. Opening it sets an HttpOnly, SameSite=Strict session cookie for the dashboard pages under /ataria/ and redirects there. The session lasts 12 hours and ends when this device is revoked. 503 when Ataria is not set up on this computer."
+      }
     }
   },
   "components": {
@@ -6964,6 +7050,26 @@
           "undone",
           "done_at"
         ]
+      },
+      "AtariaDashboardLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "expires_in"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/ataria/open\\?code=[A-Za-z0-9_-]{20,100}$",
+            "description": "Join with the gateway URL the device already uses"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
+          }
+        }
       }
     }
   }

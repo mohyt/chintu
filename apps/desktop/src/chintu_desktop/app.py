@@ -18,7 +18,7 @@ import time
 import webbrowser
 from dataclasses import asdict
 
-from . import __version__, autostart, daemon, local, notify, pairing, status, tailscale
+from . import __version__, autostart, daemon, local, notify, pairing, remote, status, tailscale
 from .layout import Layout
 
 SERVE_REFRESH_EVERY_POLLS = 6  # with a 5 s poll that is every 30 s
@@ -162,6 +162,9 @@ class DesktopApp:
         yield MenuItem("Show pairing QR", self._show_qr, enabled=state.daemon_running, default=True)
         yield MenuItem("Open pairing page in browser", self._open_pair_page, enabled=state.daemon_running)
         yield MenuItem("Open console", self._open_console, enabled=state.daemon_running)
+        dashboard = self._dashboard_title(state)
+        if dashboard:
+            yield MenuItem(dashboard, self._open_ataria)
         if state.daemon_running:
             yield MenuItem(self._phones_title(), Menu(self._phones_items))
         yield Menu.SEPARATOR
@@ -367,6 +370,26 @@ class DesktopApp:
         # The gateway has no separate console yet; the pairing page is the operator page for now.
         self._open_pair_page(icon, item)
 
+    def _dashboard_title(self, state):
+        # The dashboard comes from the computer that runs Ataria: this one, else the paired one.
+        if state.ataria:
+            return "Open Ataria dashboard"
+        name = remote.connected_name(self.layout)
+        return "Open Ataria dashboard (%s)" % name if name else None
+
+    def _open_ataria(self, icon, item):
+        local_ataria = self.state.ataria
+
+        def work():
+            try:
+                url = remote.dashboard_url(self.layout, self.local, local_ataria)
+            except (remote.RemoteError, local.LocalError) as error:
+                self._say(str(error))
+                return
+            if url:
+                self._open(url)
+        self._in_background(work)
+
     def _open(self, url):
         webbrowser.open(url)
 
@@ -483,6 +506,8 @@ def build_parser():
     for name, help_text in (("run", "show the tray icon (default)"),
                             ("status", "print one status snapshot as JSON and exit (no tray)"),
                             ("qr-window", "open the pairing QR window on its own (used by the tray)"),
+                            ("pairing-code", "print a one-time code that pairs another computer with this one "
+                                             "(for `chintu-desktop ataria connect` there)"),
                             ("init", "create the Chintu folder and its default gateway.local.json when missing, "
                                      "then print the config path (no tray)"),
                             ("install-autostart", "install the login item for this user"),
@@ -558,10 +583,54 @@ def _run_ataria(argv):
     The profile lives in this layout's Chintu folder unless ATARIA_PROFILE names another file.
     """
     import os
+    if argv and argv[0] in ("connect", "disconnect", "dashboard"):
+        return _ataria_remote(list(argv))
     from chintu_ataria.cli import main as ataria_main
     if not os.environ.get("ATARIA_PROFILE"):
         os.environ["ATARIA_PROFILE"] = str(Layout.detect().home / "ataria.json")
     return ataria_main(list(argv))
+
+
+def _ataria_remote(argv):
+    """`chintu-desktop ataria connect|disconnect|dashboard`: reach the dashboard of the computer running Ataria."""
+    parser = argparse.ArgumentParser(prog="chintu-desktop ataria")
+    commands = parser.add_subparsers(dest="command", required=True)
+    connect = commands.add_parser("connect", help="pair with the computer that runs Ataria")
+    connect.add_argument("code", help="the code `chintu-desktop pairing-code` printed there, or - to read it from stdin")
+    commands.add_parser("disconnect", help="revoke this computer there and forget it")
+    dashboard = commands.add_parser("dashboard", help="open the dashboard in the browser (or print its link)")
+    dashboard.add_argument("--print", action="store_true", help="print the one-time link instead of opening it")
+    args = parser.parse_args(argv)
+    layout = Layout.detect()
+    try:
+        if args.command == "connect":
+            code = sys.stdin.read() if args.code == "-" else args.code
+            url, name = remote.connect(layout, code)
+            print("Paired with %s (%s). Open the dashboard from the tray or with `chintu-desktop ataria dashboard`."
+                  % (name or url, url))
+            return 0
+        if args.command == "disconnect":
+            print("Disconnected." if remote.disconnect(layout) else "Not connected to another computer.")
+            return 0
+        port = daemon.resolve_port(layout, None)
+        client = local.LocalClient(layout, port)
+        try:
+            local_ataria = client.status().get("ataria") is True
+        except local.LocalError:
+            local_ataria = False
+        url = remote.dashboard_url(layout, client, local_ataria)
+    except (remote.RemoteError, local.LocalError) as error:
+        print("chintu-desktop: %s" % error, file=sys.stderr)
+        return 1
+    if url is None:
+        print("chintu-desktop: Ataria does not run on this computer and none is connected; "
+              "see `chintu-desktop ataria connect --help`.", file=sys.stderr)
+        return 1
+    if args.print:
+        print(url)
+    else:
+        webbrowser.open(url)
+    return 0
 
 
 def main(argv=None):
@@ -582,6 +651,18 @@ def main(argv=None):
         return 0
     if command == "init":
         print(_init(args.layout))
+        return 0
+    if command == "pairing-code":
+        try:
+            value = local.LocalClient(args.layout, args.port).post_json("/local/pairing-code")
+        except local.LocalError as error:
+            print("chintu-desktop: %s" % error, file=sys.stderr)
+            return 1
+        if not isinstance(value, dict) or "payload" not in value:
+            message = (value or {}).get("error", {}).get("message") if isinstance(value, dict) else None
+            print("chintu-desktop: %s" % (message or "the gateway did not return a pairing code"), file=sys.stderr)
+            return 1
+        print(value["payload"])
         return 0
     if command == "install-autostart":
         target, hint = autostart.install(args.layout)

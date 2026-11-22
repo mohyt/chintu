@@ -42,26 +42,37 @@ LIMITS = {"title": 1000, "short_title": 200, "owner": 200, "next": 2000, "why": 
 class AtariaConfig:
     url: str
     token_file: Path
+    web_url: str = ""         # the engine's dashboard root; defaults to url without its /api/v1
+
+    def __post_init__(self):
+        if not self.web_url:
+            web = self.url[:-len("/api/v1")] if self.url.endswith("/api/v1") else self.url
+            object.__setattr__(self, "web_url", web.rstrip("/"))
 
 
 def parse_config(value, base_dir):
-    """The optional `ataria` block of gateway.json: {"url": loopback http URL, "token_file": path}."""
+    """The optional `ataria` block of gateway.json: {"url": loopback http URL, "token_file": path},
+    plus an optional "web_url" for the dashboard (default: url without its /api/v1)."""
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {"url", "token_file"}:
-        raise ValueError("ataria needs exactly url and token_file")
-    url, token_file = value["url"], value["token_file"]
-    if not isinstance(url, str) or not isinstance(token_file, str) or len(url) > 512 or len(token_file) > 1024:
-        raise ValueError("ataria url and token_file must be short strings")
-    parts = urlsplit(url)
-    if parts.scheme != "http" or parts.username or parts.password or parts.query or parts.fragment:
-        raise ValueError("ataria url must be a plain http URL")
-    if not loopback(parts.hostname):
-        raise ValueError("ataria url must point at this machine (127.0.0.1, ::1 or localhost)")
+    if not isinstance(value, dict) or not {"url", "token_file"} <= set(value) <= {"url", "token_file", "web_url"}:
+        raise ValueError("ataria needs url and token_file, and may have web_url")
+    url, token_file, web_url = value["url"], value["token_file"], value.get("web_url", "")
+    if not all(isinstance(item, str) for item in (url, token_file, web_url)) or max(len(url), len(web_url)) > 512 \
+            or len(token_file) > 1024:
+        raise ValueError("ataria url, web_url and token_file must be short strings")
+    for name, address in (("url", url), ("web_url", web_url)):
+        if name == "web_url" and not address:
+            continue
+        parts = urlsplit(address)
+        if parts.scheme != "http" or parts.username or parts.password or parts.query or parts.fragment:
+            raise ValueError(f"ataria {name} must be a plain http URL")
+        if not loopback(parts.hostname):
+            raise ValueError(f"ataria {name} must point at this machine (127.0.0.1, ::1 or localhost)")
     path = Path(token_file).expanduser()
     if not path.is_absolute():
         path = Path(base_dir) / path
-    return AtariaConfig(url.rstrip("/"), path.resolve())
+    return AtariaConfig(url.rstrip("/"), path.resolve(), web_url.rstrip("/"))
 
 
 def loopback(host):

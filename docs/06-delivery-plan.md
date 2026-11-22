@@ -160,6 +160,7 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | Tools sheet for `inspect`, `develop` and `desktop` | Fixed lists for confined profiles; `desktop` probe lists MCP servers, tools and skills without sending a prompt; fallback states its reason | FR-23 |
 | Ataria board through the gateway: status, today, a past date, ticks, a missing day, an engine that is down, a bad token file, an answer outside the contract | Gateway tests against a fake engine pass: fields outside the contract are dropped, long text is trimmed, a malformed board is `502`, a down engine is `503` retryable, a token file readable by others is refused, nothing reaches the engine before pairing; the owner's prototype engine served a real 149-item board that validated | FR-24, D25 |
 | Today sheet on the phone | Board grouping core tests pass (sections, a todo folded into its item, todos under items, orphan todos, order, counts line); device check of ticks pending | FR-24 |
+| Ataria dashboard through the gateway: one-time link, session cookie, pages, writes, revocation, the tray's local link, paths outside the web root; a computer paired with the one running Ataria | Gateway tests against a fake engine pass (a code works once and expires, the cookie is `HttpOnly`, `SameSite=Strict`, `Secure` off loopback only, a write without `X-Ataria` is refused, revocation ends the session, `..` and empty segments never reach the engine); desktop tests of pairing, the saved token's mode and local-first choice pass; the owner's engine served the page, script, styles, a 173-item day, past days, months and a note through the branch's gateway | FR-25 |
 
 ## Requirement coverage
 
@@ -172,6 +173,7 @@ Choose and test a local wake-word engine independently of Ubuntu and the standar
 | FR-08, FR-15 | M3 session identity; M4 durability/replay | M5–M7 |
 | FR-20–23 | Conversation, folder and tool-catalog gateway tests; voice command parser tests | Phone two-turn recall, folder picker and tools sheet on a real computer |
 | FR-24 | Ataria gateway tests against a fake engine; board grouping core tests | Phone Today sheet against a real engine; ticks visible in the vault |
+| FR-25 | Dashboard gateway tests against a fake engine; desktop pairing tests; installer test of `--no-ataria-runtime` | Phone and the Mac's tray opening the dashboard of the computer that runs Ataria |
 | FR-09–10 | M3 runtime controls; M4 lifecycle/approval fixtures | M6–M7 real adapters |
 | FR-12 | Failure cases in M1–M4 | M5–M7 |
 | NFR-01–03 | M2 private access; M4 acceptance/deduplication/recovery | M5–M7 |

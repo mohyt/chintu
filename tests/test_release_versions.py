@@ -101,6 +101,18 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             sh(script + "CHINTU_ATARIA_PROFILE=$T/missing.json; setup_ataria")
 
+    def test_dashboard_only_computer_asks_nothing(self):
+        self.assertEqual(sh("parse_args --no-ataria-runtime; echo $CHINTU_ATARIA_RUNTIME"), "0")
+        script = ("T=$(mktemp -d); APP_BIN=$T/cli; printf '#!/bin/sh\\necho \"$*\" >> %s/calls\\n' $T > $APP_BIN; "
+                  "chmod +x $APP_BIN; PROFILE=$T/home/ataria.json; CHINTU_ATARIA_RUNTIME=0; ")
+        out = sh(script + "CHINTU_ATARIA=1; setup_ataria; [ -f $T/calls ] && cat $T/calls || echo none")
+        self.assertIn("pairing-code | chintu-desktop ataria connect -", out)
+        self.assertTrue(out.endswith("none"))
+        out = sh(script + "mkdir -p $T/home; echo '{}' > $T/home/ataria-remote.json; setup_ataria")
+        self.assertIn("Open Ataria dashboard", out)
+        with self.assertRaises(AssertionError):
+            sh(script + "echo '{}' > $T/mine.json; CHINTU_ATARIA_PROFILE=$T/mine.json; setup_ataria")
+
 
 if __name__ == "__main__":
     unittest.main()

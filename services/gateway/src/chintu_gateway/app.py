@@ -15,7 +15,7 @@ from chintu_adapters.types import tool_catalog
 import logging
 
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
@@ -26,7 +26,7 @@ from .errors import ApiError, unavailable
 from .manager import Manager
 from .store import Store
 from .systems import TailscaleDiscovery
-from . import ataria as atarias, okf, pairing_page
+from . import ataria as atarias, ataria_web, okf, pairing_page
 from . import workspace as workspaces
 from .stream import EventHub, StreamRegistry, frame
 
@@ -323,6 +323,7 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
             "tailscale": {"status": found.get("status"), "reason": found.get("reason"),
                           "gateway_url": own["gateway_url"] if own else None, "name": own["name"] if own else None},
             "pair_url": "http://127.0.0.1:%d/pair" % (request.url.port or DEFAULT_PORT),
+            "ataria": settings.ataria is not None,
         })
         return status
 
@@ -355,6 +356,58 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
         name = pairing_page.default_name(own["gateway_url"])
         return {"payload": pairing_page.pairing_payload(own["gateway_url"], name, secret),
                 "url": own["gateway_url"], "name": name, "expires_in": ttl}
+
+    # --- The Ataria dashboard in a browser (ataria_web.py). ---
+    dashboard = ataria_web.Sessions()
+    pages = ataria_web.Pages(settings.ataria) if settings.ataria is not None else None
+
+    @app.post("/local/ataria/link", include_in_schema=False)
+    async def local_ataria_link(request: Request):
+        # The tray on this machine opens the dashboard at http://127.0.0.1:<port> + path.
+        if not local_only(request):
+            raise refuse_local()
+        if pages is None:
+            raise ApiError(503, "ataria_unavailable", "Ataria is not set up on this computer.")
+        return dashboard.link(ataria_web.LOCAL)
+
+    def page(status, text):
+        return HTMLResponse(pairing_page.message_page("Ataria", text), status_code=status, headers=ataria_web.HEADERS)
+
+    @app.get("/ataria/open", include_in_schema=False)
+    async def ataria_open(request: Request):
+        if pages is None:
+            return page(503, "Ataria is not set up on this computer.")
+        token = dashboard.open(request.query_params.get("code"))
+        if token is None:
+            return page(401, "This link has expired or was already used. Open the dashboard again from Chintu.")
+        response = RedirectResponse("/ataria/", status_code=303, headers=ataria_web.HEADERS)
+        response.set_cookie(ataria_web.COOKIE, token, max_age=ataria_web.SESSION_SECONDS, path="/ataria/",
+                            httponly=True, samesite="strict", secure=ataria_web.secure_cookie(request.headers.get("host")))
+        return response
+
+    @app.get("/ataria", include_in_schema=False)
+    async def ataria_root():
+        return RedirectResponse("/ataria/", status_code=307)
+
+    @app.api_route("/ataria/{path:path}", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+    async def ataria_page(request: Request, path: str):
+        if pages is None:
+            return page(503, "Ataria is not set up on this computer.")
+        owner = dashboard.owner(request.cookies.get(ataria_web.COOKIE))
+        if owner is not None and owner != ataria_web.LOCAL and not store.client_active(owner):
+            dashboard.end(owner)
+            owner = None
+        if owner is None:
+            return page(401, "Open the Ataria dashboard from the Chintu app or the Chintu tray icon.")
+        if request.method != "GET" and request.headers.get("X-Ataria") != "1":
+            return page(403, "This request is missing the X-Ataria header.")
+        target = ataria_web.web_path(path)
+        query = request.url.query
+        if target is None or len(query) > 2000:
+            return page(404, "Not found.")
+        data = await request.body() if request.method == "POST" else None
+        status, kind, raw = await pages.fetch(request.method, target, query, data, request.headers.get("content-type"))
+        return Response(raw, status_code=status, media_type=kind, headers=ataria_web.HEADERS)
 
     @app.post("/api/v1/pair", dependencies=[Depends(protocol)])
     async def pair(request: Request):
@@ -424,6 +477,12 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     async def ataria_done(request: Request):
         value = await body(request, "AtariaDoneRequest")
         return await ataria_engine().done(value)
+
+    @api.post("/ataria/link")
+    async def ataria_link(request: Request):
+        # A one-time link that opens the dashboard in a browser, signed in as this device.
+        ataria_engine()
+        return contract.validate("AtariaDashboardLink", dashboard.link(request.state.client_id))
 
     @api.get("/systems")
     async def systems():

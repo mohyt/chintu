@@ -126,3 +126,13 @@ main{{max-width:480px;padding:24px;text-align:center}}p{{color:#9691AE}}</style>
 <body><main><h1>Chintu can't pair yet</h1><p>{html.escape(str(reason))}</p>
 <p>Connect this computer to Tailscale, then reload this page.</p></main></body></html>
 """
+
+
+def message_page(title, text):
+    """A small page with one message, in the pairing page's style."""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{html.escape(title)}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{{background:#060316;color:#F4F0FF;font:16px system-ui;display:grid;place-items:center;min-height:100vh;margin:0}}
+main{{max-width:480px;padding:24px;text-align:center}}p{{color:#9691AE}}</style></head>
+<body><main><h1>{html.escape(title)}</h1><p>{html.escape(text)}</p></main></body></html>
+"""
