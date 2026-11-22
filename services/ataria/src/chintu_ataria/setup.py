@@ -8,6 +8,7 @@ those stay in the agents' own logins or the system's credential store (`secrets`
 """
 
 import os
+import re
 import shutil
 import sys
 import time
@@ -210,7 +211,9 @@ def interview(current=None, ask=None):
     owner["city"] = p.ask("City", owner.get("city"), why="local news, weather and travel")
     owner["timezone"] = p.ask("Timezone", owner.get("timezone") or detected_timezone(), required=True,
                               check=valid_timezone, why="what 'today' and due times mean")
-    locale = (os.environ.get("LANG") or "en_GB").split(".")[0].replace("_", "-")
+    locale = (os.environ.get("LANG") or "").split(".")[0].replace("_", "-")
+    if not re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", locale):     # LANG=C or POSIX on servers and CI
+        locale = "en-US"
     owner["locale"] = p.ask("Language and region", owner.get("locale") or locale, why="dates and number formats")
     out["owner"] = {k: v for k, v in owner.items() if v}
     out["vault"] = p.ask("Vault folder", cur.get("vault") or detected_vault(), required=True,
@@ -487,23 +490,22 @@ def doctor(path=None, out=None, which=shutil.which, home=None):
                 note("warn", "deny list", f"{deny_path} is readable by others; run: chmod 600 '{deny_path}'")
             else:
                 note("ok", "deny list", str(deny_path))
-        for name, secret in (value.get("secrets") or {}).items():
-            if secret["store"] == "file":
-                secret_path = Path(secret["ref"]).expanduser()
-                parent = secret_path.parent
-                if parent.is_dir() and not os.access(parent, os.X_OK):
-                    # A folder you cannot enter: the file may belong to a separate service account on purpose.
-                    note("ok", f"secret {name}", f"{secret_path} is in a folder only another account can open "
-                                                 "(not checked)")
-                    continue
-                if not secret_path.is_file():
-                    note("fail", f"secret {name}", f"{secret_path} does not exist")
-                elif secret_path.stat().st_mode & 0o077:
-                    note("fail", f"secret {name}", f"{secret_path} is readable by others; run: chmod 600 '{secret_path}'")
-                else:
-                    note("ok", f"secret {name}", str(secret_path))
+        # Only where each secret is kept is configured; doctor reports by entry name and never prints a location.
+        for name, reference in (value.get("secrets") or {}).items():
+            label, where = f"secret {name}", f"secrets.{name} in ataria.json"
+            if reference["store"] != "file":
+                note("ok", label, f"kept in {reference['store']} (not read by this check)")
+                continue
+            location = Path(reference["ref"]).expanduser()
+            if location.parent.is_dir() and not os.access(location.parent, os.X_OK):
+                # A folder you cannot enter: the file may belong to a separate service account on purpose.
+                note("ok", label, "kept in a folder only another account can open (not checked)")
+            elif not location.is_file():
+                note("fail", label, f"the file named by {where} does not exist")
+            elif location.stat().st_mode & 0o077:
+                note("fail", label, f"the file named by {where} is readable by others; make it mode 600")
             else:
-                note("ok", f"secret {name}", f"kept in {secret['store']} (not read by this check)")
+                note("ok", label, "file exists and is private")
     width = max(len(check) for _, check, _ in results)
     for level, check, detail in results:
         mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}[level]
