@@ -1,6 +1,6 @@
 # Ataria in Chintu
 
-Design v0.3 · 22 November 2026 · Decision D25 · Status: A1, A2 and the dashboard (A1b) built; A3 onwards planned
+Design v0.3 · 22 November 2026 · Decision D25 · Status: A1, A2 and the dashboard (A1b) built; A3 in progress (engine core moved); A4 onwards planned
 
 Ataria runs scheduled agent jobs. They read the owner's sources (mail, calendar, feeds, code hosts, notes), write what they find into the OKF vault, and merge it into one daily board: what needs attention today, open todos, and an outside-world digest. Today Ataria is the owner's private prototype on one Linux machine. Its prompts contain names and sources, systemd schedules it, and each job runs as a separate Linux account.
 
@@ -119,12 +119,13 @@ The schema is `services/ataria/src/chintu_ataria/schema/profile.schema.json`, an
 | --- | --- |
 | `owner` | Shared by every job: `name` (required), `full_name`, `city`, `timezone`, `locale` |
 | `vault` | The vault folder (required) |
-| `personal` | Personal life, read by the `google`, `personal`, `notes`, `finance` and `ledger` jobs: personal `email`, `family` (name, relation, school, notes), `interests`, `sources` (Gmail, Google Calendar, feed packs, voice notes), `finance` (on or off, currency, banks, statements folder) and free-text `context` notes |
+| `personal` | Personal life, read by the `google`, `personal`, `notes`, `finance` and `ledger` jobs: personal `email`, `family` (name, relation, school, notes), `interests`, `sources` (Gmail, Google Calendar, feed packs, voice notes), `finance` (on or off, currency, banks, statements folder), `growth` (a regional news desk and a course followed lesson by lesson on the dashboard) and free-text `context` notes |
 | `work` | Work, read by the `work`, `meetings` and `interviews` jobs, or `{"enabled": false}`: `company`, `role`, work `email`, `clients`, `products`, `team`, `github_orgs`, `sources` (Microsoft 365, Teams, Jira, GitHub, meetings, WhatsApp work groups) and `context` notes (how to judge work items, alert feeds) |
 | `jobs` | One entry per job: `enabled`, `agent` (`claude` or `codex`), `model` (or `null` for the agent's default) and, for Codex, `web_search` |
 | `schedule` | Morning and midday times; whether a missed step runs on wake |
 | `delivery` | `phone`, and `recipients` with name, channel, address, which areas (work, personal, family, finance) and which digests |
 | `secrets` | Where each secret lives (`keychain`, `secret-service` or a `file`) and its reference. Never the secret itself |
+| `engine` | Not personal; all optional: `state_dir` (run reports, logs, locks, outbox), `layout` (`vault` or `data`), `port`, `base`, `token_sha256_file` (the gateway's engine token, hashed), `allowed_logins`, `dashboard_url` (put in messages) |
 | `privacy` | `deny_patterns_file`, a local list of strings that must never leave the machine or reach the repository |
 
 The opinionated job defaults: Claude Code runs `work`, `meetings`, `interviews` and `notes`; Codex runs `google`, `personal` (with web search), `finance`, `ledger` and `review`. Every job can be switched to the other agent or another model during setup.
@@ -165,6 +166,27 @@ A test renders every bundled template with the example profile, so a template th
 - **Delivery.** The engine emits "board updated" and "summary ready" events. The gateway relays them over its existing event stream, so the phone updates live and can notify. Other channels, such as messaging, are optional plugins.
 
 Ataria's vault folders follow `docs/12-okf-notes.md`. Each section has an `Ataria/` folder next to the owner's own notes, and the shared OKF profile governs types and keys.
+
+## The engine core (stage A3, first part)
+
+The deterministic parts of the engine are in `services/ataria`; the agent jobs follow lane by lane.
+
+| Module | What it does |
+| --- | --- |
+| `vault.py` | Logical paths (`work/2026/11/22/items/x.md`) to real files: content in the vault's `Ataria/` folders, operational files in `engine.state_dir`; OKF frontmatter read and atomic write; the owner's timezone |
+| `board.py` | The merge: lanes to one board (`app/YYYY/MM/DD/today.md`), done ticks, ranking with at most three P0s, the digest, safe titles outside work, and the outbox (a summary for the owner, a home update for each recipient with the family area and that digest) |
+| `server.py` | The engine on loopback: the gateway's contract routes and the dashboard's own API; only the gateway (its token's SHA-256 on file) or a listed Tailscale login gets in |
+| `defaults/web/` | The dashboard. Everything personal comes from `GET api/config`: the owner's name, the run times, whether there are children or work, the regional desk and the course |
+
+```
+chintu-desktop ataria merge [--date YYYY-MM-DD] [--slot morning|midday] [--no-outbox]
+chintu-desktop ataria month-review
+chintu-desktop ataria serve [--port N]
+```
+
+**The tray runs the engine.** On a computer with an `ataria.json`, the tray starts `chintu-desktop ataria serve` beside the gateway (menu: Ataria engine status, Start or Stop Ataria engine; log `ataria-engine.log`). Before the first start it wires the two together without replacing anything already there: it creates `ataria.token` (mode 0600) when the gateway has none, writes its SHA-256 where the engine looks (`engine.token_sha256_file`, default `engine-token.sha256` in the state folder) whenever it no longer matches, and adds the `ataria` block to `gateway.local.json` when it is missing, read at the gateway's next start. When the engine's port is already taken (for example by the prototype), the tray leaves it alone. A computer installed with `--no-ataria-runtime` has no profile, so the engine never starts there.
+
+On the owner's machine the moved merge built the same board as the prototype from the same files (143 items, no differing field, the same counts and summary), and the moved server served the real board, past days, months and notes.
 
 ## Isolation
 

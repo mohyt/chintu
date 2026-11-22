@@ -5,6 +5,9 @@
   chintu-ataria profile check [--profile PATH]
   chintu-ataria render TEMPLATE [--profile PATH] [--set NAME=VALUE ...]
   chintu-ataria leaks [ROOT] [--deny FILE]
+  chintu-ataria merge [--date YYYY-MM-DD] [--slot morning|midday] [--no-outbox]   build today's board
+  chintu-ataria month-review                    the month-in-review message, once per lane and month
+  chintu-ataria serve [--port N]                the engine API and dashboard on loopback
 """
 
 import argparse
@@ -34,6 +37,16 @@ def main(argv=None):
     scan = sub.add_parser("leaks", help="find personal information in templates and code")
     scan.add_argument("root", nargs="?", default=str(Path(__file__).resolve().parents[2]))
     scan.add_argument("--deny", default=os.environ.get("ATARIA_DENY_FILE"))
+    merge = sub.add_parser("merge", help="build the day's board from the lanes (no model call)")
+    merge.add_argument("--profile")
+    merge.add_argument("--date", help="YYYY-MM-DD (default today)")
+    merge.add_argument("--slot", choices=["morning", "midday"])
+    merge.add_argument("--no-outbox", action="store_true", help="write the board only, no messages")
+    review = sub.add_parser("month-review", help="write the month-in-review message")
+    review.add_argument("--profile")
+    serve = sub.add_parser("serve", help="serve the engine API and the dashboard on loopback")
+    serve.add_argument("--profile")
+    serve.add_argument("--port", type=int)
     args = parser.parse_args(argv)
 
     try:
@@ -53,6 +66,25 @@ def main(argv=None):
             value = profile.load(args.profile)
             runtime = dict(item.split("=", 1) for item in args.set)
             sys.stdout.write(templates.render_file(args.template, value, runtime))
+            return 0
+        if args.command in ("merge", "month-review", "serve"):
+            from . import board, server, vault
+            path = Path(args.profile) if args.profile else profile.default_path()
+            value = profile.load(path)
+            v = vault.Vault(value, path)
+            if args.command == "serve":
+                server.serve(value, v, args.port)
+                return 0
+            merger = board.Merge(value, v)
+            if args.command == "month-review":
+                lanes = merger.month_review()
+                print("month-review: " + (", ".join(lanes) if lanes else "nothing new"))
+                return 0
+            if args.date and not __import__("re").match(r"^\d{4}-\d{2}-\d{2}$", args.date):
+                raise profile.ProfileError("--date must be YYYY-MM-DD")
+            day = v.parse_dt(args.date) if args.date else None
+            out, front = merger.run(day, args.slot, outbox=not args.no_outbox)
+            print(f"merge: {v.logical(out)} · {front['summary']}")
             return 0
         found = leaks.scan_tree(args.root, leaks.deny_list(args.deny))
         for leak in found:

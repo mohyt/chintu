@@ -48,6 +48,26 @@
             "statements_folder": {"$ref": "#/$defs/short"}
           }
         },
+        "growth": {
+          "type": "object",
+          "description": "The dashboard's Growth view: a regional news desk and a course to follow lesson by lesson.",
+          "properties": {
+            "region_name": {"$ref": "#/$defs/short"},
+            "region_tag": {"type": "string", "pattern": "^[a-z0-9-]{1,40}$"},
+            "course": {
+              "type": "object", "required": ["name", "lessons"],
+              "properties": {
+                "name": {"$ref": "#/$defs/short"},
+                "slug": {"type": "string", "pattern": "^[a-z0-9-]{1,40}$"},
+                "url": {"type": "string", "pattern": "^https://", "maxLength": 1024},
+                "lessons": {
+                  "type": "array", "maxItems": 500,
+                  "items": {"type": "array", "minItems": 2, "maxItems": 3, "items": {"type": "string", "maxLength": 300}}
+                }
+              }
+            }
+          }
+        },
         "context": {"$ref": "#/$defs/context"}
       }
     },
@@ -119,6 +139,19 @@
           "store": {"enum": ["keychain", "secret-service", "file"]},
           "ref": {"type": "string", "minLength": 1, "maxLength": 1024}
         }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "description": "Where and how this computer's Ataria engine runs. Not personal; every key is optional.",
+      "properties": {
+        "state_dir": {"type": "string", "maxLength": 1024, "description": "Run reports, logs, locks and the outbox (default: an ataria folder beside this file)"},
+        "layout": {"enum": ["vault", "data"], "description": "vault: content in the vault's sections (default); data: everything in state_dir"},
+        "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "base": {"type": "string", "pattern": "^/[a-z0-9-]{1,40}$"},
+        "token_sha256_file": {"type": "string", "maxLength": 1024, "description": "The SHA-256 of the gateway's engine token, one hex line"},
+        "allowed_logins": {"$ref": "#/$defs/names"},
+        "dashboard_url": {"type": "string", "pattern": "^https://", "maxLength": 1024}
       }
     },
     "privacy": {

@@ -18,7 +18,7 @@ import time
 import webbrowser
 from dataclasses import asdict
 
-from . import __version__, autostart, daemon, local, notify, pairing, remote, status, tailscale
+from . import __version__, autostart, daemon, engine, local, notify, pairing, remote, status, tailscale
 from .layout import Layout
 
 SERVE_REFRESH_EVERY_POLLS = 6  # with a 5 s poll that is every 30 s
@@ -78,6 +78,7 @@ class DesktopApp:
         self.port = args.port
         self.layout = args.layout
         self.supervisor = daemon.GatewaySupervisor(self.layout, self.port, args.gateway_args)
+        self.engine = engine.AtariaSupervisor(self.layout)
         self.local = local.LocalClient(self.layout, self.port)
         self.poller = status.Poller(self.port, self.layout, args.interval, on_state=self._on_state)
         self.state = self.poller.state
@@ -174,6 +175,13 @@ class DesktopApp:
             # Offered only when nothing answers on the port, so a stale pre-poll menu cannot start a second gateway.
             yield MenuItem("Start daemon", self._start_daemon)
         yield MenuItem("Open daemon log", self._open_log, enabled=self.supervisor.log_path.exists())
+        engine_line = self.engine.describe()
+        if engine_line:
+            yield MenuItem(engine_line, None, enabled=False)
+            if self.engine.child_running():
+                yield MenuItem("Stop Ataria engine", self._stop_engine)
+            elif not engine_line.endswith("(started elsewhere)"):
+                yield MenuItem("Start Ataria engine", self._start_engine)
         yield MenuItem("Open Chintu folder", self._open_folder)
         if self.notice:
             yield MenuItem(lambda item: self.notice or "", None, enabled=False)
@@ -281,6 +289,12 @@ class DesktopApp:
     def _start_daemon(self, icon, item):
         self._say(self.supervisor.start())
         self.poller.poll_soon()
+
+    def _start_engine(self, icon, item):
+        self._in_background(lambda: self._say(self.engine.start()))
+
+    def _stop_engine(self, icon, item):
+        self._in_background(lambda: self._say(self.engine.stop()))
 
     def _stop_daemon(self, icon, item):
         def work():
@@ -418,6 +432,8 @@ class DesktopApp:
         self.poller.stop()
         if self.supervisor.child_running():
             self.supervisor.stop()
+        if self.engine.child_running():
+            self.engine.stop()
         with self._lock:
             if self._qr_process is not None and self._qr_process.poll() is None:
                 self._qr_process.terminate()
@@ -444,6 +460,9 @@ class DesktopApp:
         """
         if self.layout.kind == "repo" or getattr(self, "no_daemon", False):
             return False
+        # The engine first: preparing it can add the gateway's `ataria` block, read when the gateway starts.
+        if self.engine.enabled() and not self.engine.child_running():
+            self._say(self.engine.start())
         if self.supervisor.listening() or self.supervisor.child_running():
             return False
         self._say(self.supervisor.start())

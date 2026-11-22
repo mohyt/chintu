@@ -14,7 +14,7 @@
   POST   {base}/api/v1/done          {done: [...], undone: [...]} -> {done, undone, done_at}
 
 Every request must come from the gateway on this machine, proven by a bearer token whose SHA-256
-is in `engine.token_sha256_file`; this process never holds the token itself. When the profile
+is in `engine.token_sha256_file` (default: `engine-token.sha256` in the state folder); this process never holds the token itself. When the profile
 lists `engine.allowed_logins`, a request with one of those `Tailscale-User-Login` headers (added
 by `tailscale serve`) is also let in. Writes need `X-Ataria: 1`.
 """
@@ -377,9 +377,8 @@ def serve(profile, v, port=None, announce=print):
     settings = profile.get("engine") or {}
     port = int(port or settings.get("port") or 8787)
     base = settings.get("base") or "/ataria"
-    token_hash_file = settings.get("token_sha256_file") or ""
-    if not token_hash_file:
-        raise SystemExit("engine.token_sha256_file is not set in ataria.json, so the gateway could not reach this server")
+    # The tray writes this file (chintu_desktop.engine.prepare); without it nothing can get in.
+    token_hash_file = settings.get("token_sha256_file") or str(v.data / "engine-token.sha256")
     engine = Engine(profile, v)
     engine.done_dir.mkdir(parents=True, exist_ok=True)
     handler = make_handler(engine, base, token_hash_file, settings.get("allowed_logins") or ())
