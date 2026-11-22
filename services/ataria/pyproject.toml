@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chintu-ataria"
-version = "0.6.0"
+version = "0.7.0rc1"
 description = "Ataria engine for Chintu: scheduled agent jobs, a daily board, personal values only from a local profile"
 requires-python = ">=3.12"
 dependencies = ["jsonschema>=4.23,<5", "pyyaml>=6,<7"]
@@ -16,4 +16,4 @@ chintu-ataria = "chintu_ataria.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-chintu_ataria = ["schema/*.json"]
+chintu_ataria = ["schema/*.json", "defaults/**/*.md"]

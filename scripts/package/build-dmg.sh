@@ -9,7 +9,7 @@
 #      CHINTU_BUILD_PYTHON names a specific interpreter for either tool). PyInstaller needs a Python with
 #      a shared libpython: uv's managed CPython and actions/setup-python both qualify; a pyenv build
 #      compiled without --enable-shared does not.
-#   2. packaging/requirements-runtime.txt (the pins from requirements-dev.lock), the three Chintu packages
+#   2. packaging/requirements-runtime.txt (the pins from requirements-dev.lock), the four Chintu packages
 #      non-editable with --no-deps, and packaging/requirements-build.txt (PyInstaller).
 #   3. The app icon from the tray orb (packaging/macos/make_icns.py), then PyInstaller with
 #      packaging/macos/chintu.spec into build/macos/dist/Chintu.app.
@@ -66,8 +66,8 @@ EOF
 # --- 2. dependencies ------------------------------------------------------------------------------
 say "Installing the pinned runtime dependencies"
 pip_install -r packaging/requirements-runtime.txt
-say "Installing chintu-adapters, chintu-gateway and chintu-desktop"
-pip_install --no-deps ./packages/agent-adapters ./services/gateway ./apps/desktop
+say "Installing chintu-adapters, chintu-gateway, chintu-ataria and chintu-desktop"
+pip_install --no-deps ./packages/agent-adapters ./services/gateway ./services/ataria ./apps/desktop
 say "Installing PyInstaller"
 pip_install -r packaging/requirements-build.txt
 

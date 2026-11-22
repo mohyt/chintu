@@ -552,10 +552,24 @@ def _run_gateway(argv):
     return gateway_main()
 
 
+def _run_ataria(argv):
+    """`chintu-desktop ataria ...` is the Ataria CLI (setup, checks, templates), the same in every layout.
+
+    The profile lives in this layout's Chintu folder unless ATARIA_PROFILE names another file.
+    """
+    import os
+    from chintu_ataria.cli import main as ataria_main
+    if not os.environ.get("ATARIA_PROFILE"):
+        os.environ["ATARIA_PROFILE"] = str(Layout.detect().home / "ataria.json")
+    return ataria_main(list(argv))
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "gateway":
         return _run_gateway(argv[1:])
+    if argv and argv[0] == "ataria":
+        return _run_ataria(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     args.layout = Layout.detect(repo=args.repo, home=args.home)

@@ -4,4 +4,4 @@ Everything personal comes from the owner's local `ataria.json` (profile.py) at r
 templates and code in this package hold none.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0-rc1"

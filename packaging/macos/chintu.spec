@@ -59,10 +59,11 @@ datas = [
     (str(bundled_cli), "claude_agent_sdk/_bundled"),
 ]
 datas += collect_data_files("chintu_desktop")                 # autostart/*.plist, *.desktop
+datas += collect_data_files("chintu_ataria")                  # schema/profile.schema.json
 datas += collect_data_files("claude_agent_sdk", excludes=["_bundled/*"])
 datas += collect_data_files("jsonschema_specifications")       # format/vocabulary JSON used by FormatChecker
 for distribution in ("claude-agent-sdk", "mcp", "fastapi", "starlette", "uvicorn",
-                     "chintu-desktop", "chintu-gateway", "chintu-adapters"):
+                     "chintu-desktop", "chintu-gateway", "chintu-adapters", "chintu-ataria"):
     try:
         datas += copy_metadata(distribution)
     except Exception:  # noqa: BLE001 - metadata is a convenience for importlib.metadata.version() lookups
@@ -72,6 +73,7 @@ hiddenimports = (
     collect_submodules("chintu_desktop")
     + collect_submodules("chintu_gateway")
     + collect_submodules("chintu_adapters")      # agent_sdk is imported by name from the operator config
+    + collect_submodules("chintu_ataria")        # `chintu-desktop ataria ...` imports it on demand
     + collect_submodules("claude_agent_sdk")     # imported lazily with importlib by the adapter
     + collect_submodules("uvicorn")              # loops/protocols/lifespan are chosen by string at run time
     + [
@@ -79,6 +81,7 @@ hiddenimports = (
         "PIL.Image", "PIL.ImageDraw", "PIL.PngImagePlugin",
         "tkinter", "_tkinter",
         "segno",
+        "yaml",
     ]
 )
 

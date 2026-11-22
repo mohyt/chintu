@@ -133,6 +133,11 @@ def render_file(path, profile, runtime=None, base=None):
     return render_text(path.read_text(encoding="utf-8"), profile, runtime, base or path.parent)
 
 
+def defaults_dir():
+    """The bundled templates (prompts and skills), shipped inside the package."""
+    return Path(__file__).resolve().parent / "defaults"
+
+
 def fields_used(text):
     """Every profile path a template refers to, for documentation and checks."""
     return sorted({m.group(1) for m in VALUE.finditer(text)} | {m.group(1) for m in IF_BLOCK.finditer(text)})

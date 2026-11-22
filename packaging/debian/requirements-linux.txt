@@ -1,5 +1,5 @@
 # Runtime wheels bundled into the Debian package (/opt/chintu/wheels), CPython 3.12 on Linux.
-# Every version is taken from requirements-dev.lock; the three chintu_* wheels are built from
+# Every version is taken from requirements-dev.lock; the four chintu_* wheels are built from
 # this checkout and added by scripts/package/build-deb.py. Development-only packages
 # (httpx, openapi-spec-validator, requests, ...) and the macOS/Windows-only pystray backends are
 # left out. Resolution must run on Linux (markers are evaluated against the host), so the build
@@ -27,6 +27,7 @@ pycparser==3.11
 pydantic==2.12.5
 pydantic-core==2.41.5
 pyjwt==2.15.1
+pyyaml==6.0.3
 pystray==0.19.5
 python-multipart==0.0.32
 python-xlib==0.33

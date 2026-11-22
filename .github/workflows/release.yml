@@ -1,7 +1,7 @@
 name: Release packages
 
 # Builds the three distributables and attaches them to the GitHub release for the tag.
-# Trigger: push a tag `vX.Y.Z` that matches the root VERSION file, or run manually.
+# Trigger: push a tag `vX.Y.Z` (or a candidate `vX.Y.Z-rcN`) that matches the root VERSION file, or run manually.
 # Secrets for the signed APK (set with scripts/package/set-signing-secrets.sh): CHINTU_KEYSTORE_B64
 # (base64 of the release keystore), CHINTU_KEYSTORE_PASSWORD, CHINTU_KEY_PASSWORD. The key alias is
 # not secret and is set below in plain text: as a secret, GitHub would mask every "chintu" in the logs.
@@ -117,8 +117,12 @@ jobs:
           (cd dist && sha256sum -- *.apk *.deb *.dmg install.sh > SHA256SUMS)
           ls -l dist
           cat dist/SHA256SUMS
+          # A release candidate (X.Y.Z-rcN) is a GitHub pre-release: `install.sh --pre` finds it,
+          # while the plain installer and "latest" stay on the newest full release.
+          pre=()
+          case "$version" in *-rc*) pre=(--prerelease) ;; esac
           if ! gh release view "$tag" > /dev/null 2>&1; then
-            gh release create "$tag" --title "Chintu $version" --notes-file docs/releases/"$tag".md \
-              || gh release create "$tag" --title "Chintu $version" --generate-notes
+            gh release create "$tag" "${pre[@]}" --title "Chintu $version" --notes-file docs/releases/"$tag".md \
+              || gh release create "$tag" "${pre[@]}" --title "Chintu $version" --generate-notes
           fi
           gh release upload "$tag" dist/* --clobber

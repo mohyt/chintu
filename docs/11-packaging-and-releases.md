@@ -8,9 +8,15 @@ Chintu ships as three installable packages, published only on GitHub Releases fo
 | `Chintu-<version>-<arch>.dmg` | macOS 13+ | `scripts/package/build-dmg.sh` | `Chintu.app`: menu-bar tray, gateway daemon and the Claude Agent SDK with its bundled CLI, frozen with PyInstaller |
 | `chintu-desktop_<version>_<arch>.deb` | Ubuntu 24.04 and 26.04, Debian 13 (amd64, arm64) | `scripts/package/build-deb.py` | Tray, gateway and vendored wheels; a venv is created under `/opt/chintu/venv` on install |
 
-The version comes from the root `VERSION` file. The Android `versionName`, the four Python
-packages and the release tag `v<version>` must all match it; the release workflow refuses a
-tag that does not.
+The version comes from the root `VERSION` file: `X.Y.Z` for a release, `X.Y.Z-rcN` for a release
+candidate. The Android `versionName`, `chintu_desktop.__version__`, `chintu_ataria.__version__` and the
+release tag `v<version>` use it as written; the four Python packages use the PEP 440 spelling
+(`X.Y.ZrcN`) and the Debian package `X.Y.Z~rcN`, so that `X.Y.Z` installs over each of its
+candidates. `tests/test_release_versions.py` checks they agree, and the release workflow refuses a
+tag that does not match `VERSION`.
+
+A candidate is published as a GitHub **pre-release**: `install.sh --pre` installs it, while the
+plain installer and the "latest" release stay on the newest full release.
 
 ## Where an installed Chintu keeps its files
 
@@ -51,8 +57,9 @@ secrets, uploaded once with `scripts/package/set-signing-secrets.sh`:
 
 ## Publishing a release
 
-1. Bump `VERSION`, the Android `versionCode`, the four `pyproject.toml` versions and
-   `chintu_desktop.__version__`; write `docs/releases/v<version>.md`.
+1. Bump `VERSION`, the Android `versionCode`, the four `pyproject.toml` versions,
+   `chintu_desktop.__version__` and `chintu_ataria.__version__`; write `docs/releases/v<version>.md`.
+   For a candidate, use `X.Y.Z-rcN` (and `X.Y.ZrcN` in the `pyproject.toml` files).
 2. Commit and push, then tag: `git tag v<version> && git push origin v<version>`.
 3. The `Release packages` workflow (`.github/workflows/release.yml`) builds the APK on Ubuntu,
    the Debian packages on Ubuntu, the disk image on `macos-15`, creates the release for the tag if
@@ -65,8 +72,13 @@ The same assets can be published by hand from local builds with
 
 - **One command (Ubuntu/Debian amd64 and arm64, Apple silicon macOS):**
   `curl -fsSL https://raw.githubusercontent.com/mohyt/chintu/main/install.sh | bash`. The root
-  `install.sh` reads the release from the GitHub API (`CHINTU_VERSION` pins one, `GITHUB_TOKEN`
-  is needed only while the repository is private), downloads the asset for the OS and CPU, checks
+  `install.sh` reads the release from the GitHub API (`--version` or `CHINTU_VERSION` pins one,
+  `--pre` takes the newest release including candidates, `--file` installs a package you already
+  have, `GITHUB_TOKEN` is needed only while the repository is private). It compares the installed
+  version first (nothing to do when it is current; `--force` reinstalls or downgrades), stops the
+  running tray and gateway before an upgrade, and afterwards checks an existing Ataria profile with
+  `chintu-desktop ataria doctor` or, on a first install, offers `chintu-desktop ataria init`
+  (`--ataria` / `--no-ataria` answer that question). `--ataria-profile PATH` installs an existing `ataria.json` instead, with mode 0600 and a dated backup of any different profile already in place; whenever a profile exists, no setup questions are asked. It then downloads the asset for the OS and CPU, checks
   it against the SHA-256 digest GitHub records for the asset (or the release's `SHA256SUMS`), then
   installs with `apt-get` or copies `Chintu.app` into `/Applications` and clears quarantine. On
   Linux it also runs `chintu-desktop init` and `install-autostart` and starts the tray when a

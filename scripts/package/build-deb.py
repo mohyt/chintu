@@ -5,7 +5,7 @@ Standard library only (tarfile + a small `ar` writer), so it runs the same way o
 GitHub `ubuntu-24.04` runner and inside `python:3.12-slim` (see build-deb.sh for the
 Docker wrapper used on macOS). Steps:
 
-1. Build the three project wheels (chintu_adapters, chintu_gateway, chintu_desktop)
+1. Build the four project wheels (chintu_adapters, chintu_gateway, chintu_ataria, chintu_desktop)
    with `python -m build --wheel` from a copy of each source tree, using a throwaway
    virtualenv under the build directory. They are pure Python, so one build serves both
    architectures.
@@ -79,7 +79,20 @@ PYTHON_VERSIONS = ("3.12", "3.13", "3.14")
 
 def abi(python_version):
     return "cp" + python_version.replace(".", "")
-PROJECTS = (REPO / "packages" / "agent-adapters", REPO / "services" / "gateway", REPO / "apps" / "desktop")
+PROJECTS = (REPO / "packages" / "agent-adapters", REPO / "services" / "gateway", REPO / "services" / "ataria",
+            REPO / "apps" / "desktop")
+# VERSION is X.Y.Z or a release candidate X.Y.Z-rcN. Python spells a candidate X.Y.ZrcN (PEP 440) and
+# Debian X.Y.Z~rcN, so that X.Y.Z sorts after every candidate; file names keep the VERSION spelling.
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$")
+
+
+def pep440(version):
+    return re.sub(r"-rc([0-9]+)$", r"rc\1", version)
+
+
+def debian_version(version):
+    return version.replace("-rc", "~rc")
+
 PINS_FILE = REPO / "packaging" / "debian" / "requirements-linux.txt"
 CONTRACT = REPO / "contracts" / "openapi.json"
 OPT = "opt/chintu"
@@ -415,9 +428,9 @@ def build_project_wheels(python, build_dir, version):
         run([python, "-m", "build", "--wheel", "--outdir", out, copy])
     wheels = sorted(out.glob("*.whl"))
     names = {wheel_name_version(w)[0]: wheel_name_version(w)[1] for w in wheels}
-    expected = {"chintu-adapters", "chintu-gateway", "chintu-desktop"}
-    if set(names) != expected or any(v != version for v in names.values()):
-        sys.exit(f"build-deb: expected wheels {sorted(expected)} at version {version}, got {names}")
+    expected = {"chintu-adapters", "chintu-gateway", "chintu-ataria", "chintu-desktop"}
+    if set(names) != expected or any(v != pep440(version) for v in names.values()):
+        sys.exit(f"build-deb: expected wheels {sorted(expected)} at version {pep440(version)}, got {names}")
     return wheels
 
 
@@ -497,6 +510,8 @@ def main(argv=None):
                  "inside python:3.12-slim with Docker.")
 
     version = (REPO / "VERSION").read_text().strip()
+    if not VERSION_RE.match(version):
+        sys.exit(f"build-deb: VERSION {version!r} is not X.Y.Z or X.Y.Z-rcN")
     arches = args.arch or sorted(ARCHES)
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH") or time.time())
     pins = read_pins()
@@ -521,8 +536,9 @@ def main(argv=None):
             per_abi[key] = runtime
         layout = split_shared(per_abi)
         layout[""] = project_wheels + layout[""]
-        entries = data_entries(version, arch, layout, icon_png, epoch)
-        deb = write_deb(args.out.resolve() / f"{PACKAGE}_{version}_{arch}.deb", version, arch, entries, epoch)
+        entries = data_entries(debian_version(version), arch, layout, icon_png, epoch)
+        deb = write_deb(args.out.resolve() / f"{PACKAGE}_{version}_{arch}.deb", debian_version(version), arch,
+                        entries, epoch)
         outputs.append(deb)
         specific = ", ".join(f"{key}: {len(layout[key])}" for key in per_abi)
         print(f"built {deb} ({deb.stat().st_size / 1_000_000:.1f} MB, {len(layout[''])} shared wheels; "

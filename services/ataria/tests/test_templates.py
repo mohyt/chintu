@@ -17,7 +17,7 @@ class TemplateTests(unittest.TestCase):
     def test_values_filters_and_runtime(self):
         self.assertEqual(self.render("{{ owner.name }} at {{work.company}}"), "Sam at Example Systems")
         self.assertEqual(self.render("{{ work.clients | join }}"), "Northwind Bank, Contoso Telecom")
-        self.assertEqual(self.render("{{ family | names }}"), "Alex, Robin")
+        self.assertEqual(self.render("{{ personal.family | names }}"), "Alex, Robin")
         self.assertEqual(self.render("{{ work.team | bullets }}"), "- Priya\n- Tom")
         self.assertEqual(self.render("{{ schedule | json }}"), '{"morning": "07:00", "midday": "13:30", "catch_up": true}')
         self.assertEqual(self.render("{{ATARIA_ROOT}}/data and {{UNSET}}", runtime={"ATARIA_ROOT": "/srv/a"}),
@@ -31,9 +31,9 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(self.render("[{{ owner.nickname? }}]"), "[]")
 
     def test_sections(self):
-        text = "{{#if family}}Family: {{ family | names }}{{else}}No family listed{{/if}}"
+        text = "{{#if personal.family}}Family: {{ personal.family | names }}{{else}}No family listed{{/if}}"
         self.assertEqual(self.render(text), "Family: Alex, Robin")
-        self.assertEqual(self.render(text, {**SAM, "family": []}), "No family listed")
+        self.assertEqual(self.render(text, {**SAM, "personal": {**SAM["personal"], "family": []}}), "No family listed")
         # A missing value inside a section that is left out is not an error.
         self.assertEqual(self.render("{{#if pets}}{{ pets.dog }}{{/if}}ok"), "ok")
         nested = "{{#if work}}A{{#if work.budget}}B{{/if}}C{{/if}}"
@@ -63,7 +63,7 @@ class TemplateTests(unittest.TestCase):
             self.assertEqual(caught.exception.missing, ["owner.missing"])
 
     def test_every_bundled_template_renders_for_the_example_profile(self):
-        defaults = ROOT / "defaults"
+        defaults = ROOT / "src" / "chintu_ataria" / "defaults"
         files = sorted(defaults.rglob("*.md"))
         self.assertTrue(files)
         for path in files:
@@ -83,7 +83,7 @@ class ProfileTests(unittest.TestCase):
         profile.validate({**SAM, "future_feature": {"x": 1}})
 
     def test_problems_are_named(self):
-        bad = {**SAM, "owner": {"role": "x"}, "schedule": {"morning": "7am"},
+        bad = {**SAM, "owner": {"city": "x"}, "schedule": {"morning": "7am"},
                "secrets": {"bank": {"store": "keychain", "ref": "a", "password": "nope"}}}
         with self.assertRaises(profile.ProfileError) as caught:
             profile.validate(bad)

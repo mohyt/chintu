@@ -8,7 +8,7 @@ Chintu (Conversational Hands-free Interface to Networked Terminals & Utilities) 
 | --- | --- |
 | `apps/android/` | Kotlin app (API 31+): speech, audio routing, pairing, activity and note modes; `tools/android.py` provisions a workspace-local SDK and Gradle |
 | `apps/desktop/` | Python tray app for macOS and GNOME: phone presence, QR pairing, gateway supervision, Tailscale Serve, revocation |
-| `services/ataria/` | Ataria engine (D25, `docs/13-ataria.md`): profile schema and loader, template renderer, leak check, bundled prompt templates in `defaults/`. Personal values come only from the owner's local `ataria.json`; `examples/profile.sam.json` is fictional |
+| `services/ataria/` | Ataria engine (D25, `docs/13-ataria.md`): profile schema and loader, template renderer, leak check, bundled prompt templates in `src/chintu_ataria/defaults/`. Personal values come only from the owner's local `ataria.json`; `examples/profile.sam.json` is fictional |
 | `services/gateway/` | FastAPI gateway on loopback with SQLite task store, pairing, local-proof endpoints and voice notes |
 | `packages/agent-adapters/` | Claude Agent SDK adapter, execution-profile confinement and the scripted fixture |
 | `contracts/` | OpenAPI 3.1 contract, adapter protocol and wire examples; `scripts/check_contract.py` validates them |
@@ -38,7 +38,7 @@ scripts/package/build-apk.sh | build-dmg.sh | build-deb.sh
 
 ## Versions and Releases
 
-The root `VERSION` file is the single version; the Android `versionName`, the four `pyproject.toml` files and `chintu_desktop.__version__` must match it. Tagging `v<version>` builds and publishes the packages. See `docs/11-packaging-and-releases.md`.
+The root `VERSION` file is the single version (`X.Y.Z`, or `X.Y.Z-rcN` for a release candidate, published as a GitHub pre-release); the Android `versionName`, `chintu_desktop.__version__` and `chintu_ataria.__version__` match it as written and the four `pyproject.toml` files use the PEP 440 spelling (`X.Y.ZrcN`); `tests/test_release_versions.py` checks this. Tagging `v<version>` builds and publishes the packages. See `docs/11-packaging-and-releases.md`.
 
 ## Commits and Pull Requests
 
