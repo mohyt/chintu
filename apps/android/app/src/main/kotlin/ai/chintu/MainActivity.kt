@@ -23,6 +23,8 @@ import ai.chintu.core.SubmissionGuard
 import ai.chintu.core.VoiceCommand
 import ai.chintu.core.DestinationMatcher
 import ai.chintu.core.ChatTranscript
+import ai.chintu.core.AtariaBoard
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
@@ -147,6 +149,9 @@ class MainActivity : Activity() {
     /** Finished turns whose full output was fetched on request. */
     private val chatExpanded = mutableSetOf<String>()
     private var overlay: android.app.Dialog? = null
+    /** Ataria's Today board (docs/13-ataria.md): shown when the connected computer has an Ataria engine. */
+    private lateinit var todayButton: Button
+    private var atariaEnabled = false
     /** Push channel for events (server-sent events); polling stays on as the safety net and takes over when it is down. */
     private var stream: EventStream? = null
     private var streamLive = false
@@ -319,6 +324,12 @@ class MainActivity : Activity() {
             contentDescription = "Settings"; setOnClickListener { showPage(2) }
         }
         header.addView(settingsButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END or Gravity.CENTER_VERTICAL))
+        todayButton = Button(this).apply {
+            text = "✓"; textSize = 22f; setTextColor(accent); background = shape(base, 24)
+            setPadding(0, 0, 0, 0); minWidth = 0; minimumWidth = 0; visibility = View.GONE
+            contentDescription = "Today: Ataria board"; setOnClickListener { showToday() }
+        }
+        header.addView(todayButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = dp(48) })
         phaseLabel = label(root, currentSuggestion(), 23f, ink, true).apply { gravity = Gravity.CENTER; maxLines = 2; minHeight = dp(76) }
         val stage = FrameLayout(this).apply { minimumHeight = dp(160) }
         root.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -1253,6 +1264,7 @@ class MainActivity : Activity() {
         updateDestination(); renderComputers(); persistChoices(); updateActivityBadge()
         polling = true; if (foreground) handler.post(poll)
         startStream()
+        checkAtaria()
         if (chatOpen) { renderChat(); handler.post { loadChat() } }
         val message = "${target.name} is connected. All new instructions will go there now."
         showStatus(message)
@@ -1883,6 +1895,116 @@ class MainActivity : Activity() {
         }
     }
     /** What the agent can use in the current chat: built-in tools, MCP servers with their tools, and skills. */
+    // --- Ataria: Today board, todos and digest from the computer's Ataria engine, through the gateway. ---
+    private fun checkAtaria() {
+        val origin = store; val ticket = epoch
+        atariaEnabled = false; if (::todayButton.isInitialized) todayButton.visibility = View.GONE
+        executor.execute {
+            val enabled = try { api(origin).call("GET", "/api/v1/ataria").optBoolean("enabled") } catch (_: Exception) { false }
+            ui(ticket) { atariaEnabled = enabled; todayButton.visibility = if (enabled) View.VISIBLE else View.GONE }
+        }
+    }
+    private fun showToday() {
+        if (!connected || !store.isPaired()) { showStatus("Connect a computer to see its Today board."); return }
+        val origin = store; val name = selectedComputer?.name ?: "the computer"
+        background("Loading today from $name…") { ticket ->
+            val board = api(origin).call("GET", "/api/v1/ataria/today")
+            ui(ticket) { renderToday(board, origin) }
+        }
+    }
+    private fun atariaEntry(value: JSONObject) = AtariaBoard.Entry(value.getString("uid"), value.getString("kind"),
+        value.getString("priority"), value.getString("group"), value.getString("title"), value.text("short_title").ifEmpty { null },
+        value.text("parent").ifEmpty { null }, value.optBoolean("done"), value.text("lane"), value.text("due").ifEmpty { null })
+    private fun renderToday(board: JSONObject, origin: ClientStore) {
+        val scroller = ScrollView(this); val body = column(scroller, 20)
+        val raw = board.optJSONArray("items") ?: JSONArray()
+        val values = (0 until raw.length()).map { raw.getJSONObject(it) }
+        val byKey = values.associateBy { it.getString("kind") + ":" + it.getString("uid") }
+        val counts = board.optJSONObject("counts")?.let { c -> c.keys().asSequence().associateWith { c.optInt(it) } }.orEmpty()
+        board.text("summary").takeIf { it.isNotEmpty() }?.let { label(body, it, 14f, ink) }
+        AtariaBoard.countsLine(counts).takeIf { it.isNotEmpty() }?.let { gap(body, 4); label(body, it, 12f, muted) }
+        val groups = AtariaBoard.sections(values.map { atariaEntry(it) })
+        if (groups.isEmpty()) { gap(body); label(body, "Nothing on the board yet.", 14f, muted) }
+        groups.forEach { group ->
+            val rows = column()
+            val done = group.section() == AtariaBoard.Section.DONE
+            gap(body, 16)
+            label(body, "${group.section().title} · ${group.rows().size}" + if (done) "  ›" else "", 17f, ink, true).apply {
+                if (done) { isClickable = true; setOnClickListener { rows.visibility = if (rows.visibility == View.GONE) View.VISIBLE else View.GONE } }
+            }
+            gap(body, 4)
+            body.addView(rows, LinearLayout.LayoutParams(-1, -2))
+            if (done) rows.visibility = View.GONE
+            group.rows().forEach { row ->
+                val item = byKey[row.entry().kind() + ":" + row.entry().uid()] ?: return@forEach
+                val action = row.action()?.let { byKey["todo:" + it.uid()] }
+                val box = column(padding = 12).apply { background = shape(surface, 16) }
+                atariaLine(box, item, action, row.entry().done() || (row.action()?.done() == true), origin, 15f)
+                row.children().forEach { child ->
+                    byKey["todo:" + child.uid()]?.let { atariaLine(box, it, null, child.done(), origin, 13f, indent = true) }
+                }
+                rows.addView(box, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+            }
+        }
+        gap(body); label(body, "Tick to mark done on ${selectedComputer?.name.orEmpty()}. Tap a line for details.", 12f, muted)
+        openOverlay("Today · " + board.text("date"), scroller)
+    }
+    /** One tickable line; tapping the text shows why, the next step and links. */
+    private fun atariaLine(parent: LinearLayout, value: JSONObject, action: JSONObject?, done: Boolean, origin: ClientStore,
+                           size: Float, indent: Boolean = false) {
+        val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
+        if (indent) line.setPadding(dp(28), dp(6), 0, 0)
+        parent.addView(line, LinearLayout.LayoutParams(-1, -2))
+        val uid = value.getString("uid")
+        val title = value.text("short_title").ifEmpty { value.getString("title") }
+        val text = column()
+        val head = label(text, title, size, ink, !indent)
+        fun strike(on: Boolean) { head.paintFlags = if (on) head.paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+            else head.paintFlags and android.graphics.Paint.STRIKE_THRU_TEXT_FLAG.inv(); head.alpha = if (on) .55f else 1f }
+        val check = CheckBox(this).apply { isChecked = done; buttonTintList = android.content.res.ColorStateList.valueOf(accent)
+            contentDescription = "Done: $title" }
+        line.addView(check, LinearLayout.LayoutParams(-2, -2))
+        line.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
+        strike(done)
+        val meta = listOf(value.text("lane"), value.text("priority").takeIf { it != "P3" && it != "OK" }.orEmpty(),
+            value.text("due").takeIf { it.isNotEmpty() }?.let { "due $it" }.orEmpty(), value.text("owner")).filter { it.isNotEmpty() }
+        if (meta.isNotEmpty()) label(text, meta.joinToString(" · "), 12f, muted)
+        action?.let { label(text, "→ " + it.text("short_title").ifEmpty { it.getString("title") }, 13f, accent) }
+        val details = column().apply { visibility = View.GONE }
+        text.addView(details, LinearLayout.LayoutParams(-1, -2))
+        if (title != value.getString("title")) label(details, value.getString("title"), 13f, ink)
+        value.text("why").takeIf { it.isNotEmpty() }?.let { gap(details, 4); label(details, it, 13f, muted) }
+        value.text("next").takeIf { it.isNotEmpty() }?.let { gap(details, 4); label(details, "Next: $it", 13f, ink) }
+        val links = value.optJSONArray("links") ?: JSONArray()
+        (0 until links.length()).map { links.getJSONObject(it) }.forEach { link ->
+            label(details, "↗ " + link.text("title").ifEmpty { "Open" }, 13f, accent).apply {
+                minHeight = dp(36); gravity = Gravity.CENTER_VERTICAL
+                setOnClickListener { try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link.getString("url")))) }
+                    catch (_: Exception) { showStatus("No app can open that link.") } }
+            }
+        }
+        text.isClickable = true
+        text.setOnClickListener { details.visibility = if (details.visibility == View.GONE) View.VISIBLE else View.GONE }
+        var reverting = false
+        check.setOnCheckedChangeListener { box, checked ->
+            if (reverting) return@setOnCheckedChangeListener
+            strike(checked)
+            val ticket = epoch
+            val payload = JSONObject().put("done", JSONArray(if (checked) listOf(uid) else emptyList<String>()))
+                .put("undone", JSONArray(if (checked) emptyList<String>() else listOf(uid)))
+            executor.execute {
+                try {
+                    api(origin).call("POST", "/api/v1/ataria/done", payload.toString())
+                    ui(ticket) { showStatus(if (checked) "Marked done: $title" else "Marked not done: $title") }
+                } catch (failure: Exception) {
+                    ui(ticket) {
+                        reverting = true; box.isChecked = !checked; reverting = false; strike(!checked)
+                        showStatus(if (failure is java.io.IOException) "Couldn't reach the computer; the tick was not saved." else "The tick was not saved.")
+                    }
+                }
+            }
+        }
+    }
     private fun showTools() {
         val chat = store.conversation; val choice = selection()
         val projectId = chat?.optString("project_id")?.ifEmpty { null } ?: choice?.first
