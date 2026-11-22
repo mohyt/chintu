@@ -32,7 +32,7 @@ This plan brings Ataria into this repository as an optional, public component th
 | Path | What it holds |
 | --- | --- |
 | `services/ataria/` | The engine: profile loading, scheduler, job runner, prompt rendering, merge, month close, the local API |
-| `services/ataria/defaults/` | The bundled flow, job manifests, prompt and skill templates, and feed packs |
+| `services/ataria/src/chintu_ataria/defaults/` | The bundled flow, job manifests, prompt and skill templates, and feed packs |
 | `services/gateway/` | Adds `/api/v1/ataria/*` routes that pass requests to the engine and relay its events. The routes are defined in the contract first. |
 | `apps/desktop/` | An `AtariaSupervisor` beside `GatewaySupervisor`; the setup sheet and `chintu ataria init` / `doctor` |
 | `apps/android/` | The Ataria tab |
@@ -83,9 +83,13 @@ The schema is `services/ataria/src/chintu_ataria/schema/profile.schema.json`, an
 
 Unknown keys are allowed and kept, so a newer profile works with older code. Agents keep their own logins (Claude Code, Codex and their connectors); the profile never holds a password or token.
 
+### Setting it up
+
+`chintu-desktop ataria init` asks for every part of the profile, section by section, and writes it only after showing a summary. Run again, it edits: each question shows the current answer and Enter keeps it, unknown keys are kept, and the previous file is kept as a dated backup. `chintu-desktop ataria doctor` checks the profile (valid and private), that every bundled template can be filled from it, the timezone, the vault folder, that each chosen agent is installed and looks signed in, the deny list, and secret references stored in files. `install.sh` offers `init` on a first install and runs `doctor` on an upgrade. A setup sheet in the tray app, writing the same file through the same code, is planned for a later candidate.
+
 ## Templates
 
-Prompts and skills under `services/ataria/defaults/` are templates, filled from the profile at run time (`chintu_ataria.templates`):
+Prompts and skills under `services/ataria/src/chintu_ataria/defaults/` are templates, filled from the profile at run time (`chintu_ataria.templates`):
 
 | Syntax | Meaning |
 | --- | --- |

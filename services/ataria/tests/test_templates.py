@@ -63,7 +63,7 @@ class TemplateTests(unittest.TestCase):
             self.assertEqual(caught.exception.missing, ["owner.missing"])
 
     def test_every_bundled_template_renders_for_the_example_profile(self):
-        defaults = ROOT / "defaults"
+        defaults = ROOT / "src" / "chintu_ataria" / "defaults"
         files = sorted(defaults.rglob("*.md"))
         self.assertTrue(files)
         for path in files:

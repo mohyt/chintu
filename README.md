@@ -109,7 +109,7 @@ Manual alternative: download `Chintu-<version>-arm64.dmg` from [Releases](https:
    Run it in a real terminal: `sudo` has to ask for your password, which it cannot do over a non-interactive session. The installer verifies the package's SHA-256, installs the `.deb` with `apt`, creates the login item and starts the Chintu tray in the top bar.
 3. On GNOME the tray icon needs the AppIndicator extension. Ubuntu ships it enabled; on other GNOME setups see [Troubleshooting](#tray-icon-missing-on-gnome).
 
-`CHINTU_VERSION=0.4.2` in front of `bash` pins a version (for example `curl … | CHINTU_VERSION=0.4.2 bash`). The `.deb` bundles wheels for the system Python 3.12, 3.13 and 3.14, so it installs on Ubuntu 24.04, Ubuntu 26.04 and Debian 13.
+`curl … | bash -s -- --version 0.6.0` pins a version and `--pre` installs the newest test release (see `--help` for the rest). Running the same command later upgrades Chintu in place: it stops the running tray and gateway, installs, and starts them again. On a first install it also offers to set up [Ataria](#ataria-daily-board). The `.deb` bundles wheels for the system Python 3.12, 3.13 and 3.14, so it installs on Ubuntu 24.04, Ubuntu 26.04 and Debian 13.
 
 <img src="docs/images/install/ubuntu-1-installer.png" width="700" alt="Terminal output of the one-line installer on Ubuntu: checksum verified, chintu-desktop 0.4.2 installed, login item created, Chintu running in the top panel">
 
@@ -178,6 +178,19 @@ Each task runs under a permission profile that decides what the agent may do on 
 `inspect` and `develop` allow only file tools (and commands in `develop`), so connectors, MCP servers and web tools are refused there. The confinement is enforced by a hook before every tool call; its exact guarantees and gaps are in [deploy/README.md](deploy/README.md#execution-profiles), which also explains [how to enable `desktop`](deploy/README.md#enabling-the-desktop-profile).
 
 To switch: on the home screen tap the gear (⚙) to open Settings, open the permission profile dropdown and choose `develop`. The home screen then says "\<Computer\> is online in develop mode." The choice is per computer and remembered.
+
+## Ataria daily board
+
+Ataria is an optional part of Chintu that reads your sources (mail, calendar, work tools, news feeds, voice notes) on a schedule and builds a daily board: what needs you today, open todos, and a digest of what is worth knowing. The phone shows it behind the **✓** button when the selected computer has Ataria set up.
+
+Everything personal it needs (your name, timezone, vault folder, clients, family, who gets which digest) lives only in `ataria.json` on your computer, readable by you alone; the code and prompts in this repository contain none of it. Set it up, or change your answers later, with:
+
+```sh
+chintu-desktop ataria init      # asks about 30 short questions; re-run to edit
+chintu-desktop ataria doctor    # checks the profile, vault, agent sign-ins and secret references
+```
+
+The installer offers `init` on a first install and runs `doctor` on an upgrade. Ataria's design is in [docs/13-ataria.md](docs/13-ataria.md); in 0.7.0 test releases the scheduled jobs still come from the owner's existing setup and move into Chintu before 0.7.0.
 
 ## Troubleshooting
 
