@@ -230,6 +230,26 @@ stop_running() {
   warn "Chintu did not stop within 10 seconds; continuing"
 }
 
+restart_after_failure() {
+  local code=$?
+  if [ "$code" -ne 0 ]; then
+    warn "install failed; starting the installed Chintu again"
+    start_tray || true
+  fi
+  rm -rf "$WORK"
+}
+
+# Asks for the administrator password up front, so a missing terminal fails before Chintu is stopped.
+ensure_admin() {
+  case "$OS" in
+    Linux) [ "$(id -u)" -eq 0 ] && return 0 ;;
+    Darwin) [ -w /Applications ] && return 0 ;;
+  esac
+  need sudo
+  # sudo asks on the terminal itself, so this works under `curl ... | bash` too; it fails without one.
+  sudo -v || die "sudo could not ask for your password (no terminal). Nothing was changed. Run the installer in a terminal on this computer, or over SSH with one (ssh -t)."
+}
+
 install_linux() {
   local sudo=""
   [ "$(id -u)" -eq 0 ] || { need sudo; sudo=sudo; }
@@ -407,11 +427,15 @@ main() {
     download_asset "$WORK/release.json" "$ASSET" "$WORK/$ASSET"
     verify "$WORK/release.json" "$WORK/$ASSET"
   fi
+  ensure_admin
   stop_running
+  # If the install fails after Chintu was stopped, start the version that is still installed.
+  trap restart_after_failure EXIT
   case "$OS" in
     Linux) install_linux ;;
     Darwin) install_macos ;;
   esac
+  trap 'rm -rf "$WORK"' EXIT
   setup_ataria
   start_tray
   check_prerequisites
