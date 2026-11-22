@@ -4406,6 +4406,302 @@
         },
         "description": "Server-sent events (`text/event-stream`) over the same private HTTPS origin and bearer credential. The stream first sends `retry: 2000` and an `event: ready` frame whose data is `{cursor, heartbeat_seconds, max_seconds}`, then every stored event after the cursor in event-ID order as `id: <event_id>`, `event: <kind>` and one `data:` line holding the `Event` envelope, then each new event as it commits. A `: keepalive` comment is sent when nothing else was sent for `heartbeat_seconds`. The server ends the stream after `max_seconds`, when the credential is revoked or expires, and when the same client opens more than three streams (oldest first); clients reconnect with `Last-Event-ID`. The stream is an optimisation of `GET /api/v1/events`: clients keep the cursor and fall back to polling, and lose nothing when it drops."
       }
+    },
+    "/api/v1/ataria": {
+      "get": {
+        "operationId": "getAtariaStatus",
+        "summary": "Whether Ataria is set up on this computer, whether its engine answers, and the newest board's date",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Chintu-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol version. Unsupported/missing versions return 426."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ataria status; enabled is false when this computer has no Ataria engine configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtariaStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Queue full or rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ataria/today": {
+      "get": {
+        "operationId": "getAtariaBoard",
+        "summary": "The newest daily board, or the board for one date, with done ticks applied",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Chintu-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol version. Unsupported/missing versions return 426."
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "maxLength": 10
+            },
+            "description": "YYYY-MM-DD in the owner's timezone; omitted for the newest board."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One daily board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtariaBoard"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request/cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Queue full or rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Ataria engine answered with something the gateway could not use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ataria/done": {
+      "post": {
+        "operationId": "markAtariaDone",
+        "summary": "Tick items or todos done, or untick them",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Chintu-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol version. Unsupported/missing versions return 426."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AtariaDoneRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ticks were recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtariaDoneResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Queue full or rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Ataria engine answered with something the gateway could not use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6316,6 +6612,357 @@
           "mcp_servers",
           "skills",
           "reason"
+        ]
+      },
+      "AtariaUid": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 193,
+        "pattern": "^[a-z][a-z0-9_-]{0,31}\\.[A-Za-z0-9][A-Za-z0-9._=+-]{0,160}$",
+        "description": "<lane>.<id>, where id is the concept's file name without .md. What a done tick applies to."
+      },
+      "AtariaCounts": {
+        "type": "object",
+        "maxProperties": 32,
+        "propertyNames": {
+          "pattern": "^[A-Za-z0-9_]{1,32}$"
+        },
+        "additionalProperties": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "description": "Counts by priority (P0 to P3, OK) and by state (open, done_today)."
+      },
+      "AtariaLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "pattern": "^https?://"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ]
+      },
+      "AtariaItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One line on the board: an item a job found, or a todo under it. A tick applies to a uid, so an item and the todo under it may share one uid; one tick then covers both. A todo whose parent is done counts as done.",
+        "properties": {
+          "uid": {
+            "$ref": "#/components/schemas/AtariaUid"
+          },
+          "lane": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+            "description": "The job that wrote it, such as work, meetings or personal."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "item",
+              "todo"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3",
+              "OK"
+            ]
+          },
+          "group": {
+            "type": "string",
+            "enum": [
+              "open",
+              "done",
+              "info"
+            ],
+            "description": "info is the digest: news and updates to read, nothing to do."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "short_title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "done_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "maxLength": 10
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "area": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AtariaUid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/AtariaLink"
+            }
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "uid",
+          "lane",
+          "kind",
+          "priority",
+          "group",
+          "title",
+          "done"
+        ]
+      },
+      "AtariaBoard": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            "maxLength": 10
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "slot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "counts": {
+            "$ref": "#/components/schemas/AtariaCounts"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/AtariaItem"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "title",
+          "summary",
+          "counts",
+          "items"
+        ]
+      },
+      "AtariaStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "latest_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "maxLength": 10
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "reachable",
+          "latest_date",
+          "reason"
+        ]
+      },
+      "AtariaDoneRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "done": {
+            "type": "array",
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/AtariaUid"
+            }
+          },
+          "undone": {
+            "type": "array",
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/AtariaUid"
+            }
+          }
+        },
+        "required": [
+          "done",
+          "undone"
+        ]
+      },
+      "AtariaDoneResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "done": {
+            "type": "array",
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/AtariaUid"
+            }
+          },
+          "undone": {
+            "type": "array",
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/AtariaUid"
+            }
+          },
+          "done_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "done",
+          "undone",
+          "done_at"
         ]
       }
     }

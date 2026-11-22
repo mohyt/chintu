@@ -77,6 +77,7 @@ A cellular handover disconnects the phone. The desktop continues accepted jobs. 
 | FR-21 | Offer a chat view of conversations on each computer: list, open, continue, stop a running turn, archive | V1 | Chats list ordered by last activity; thread streams every tool step and the full reply text while a turn runs and keeps them afterwards; archived chats leave the list and refuse new turns |
 | FR-22 | Choose a working directory inside a registered workspace for each conversation, by touch or by voice | V1 | Folder picker and “Chintu, new chat in FOLDER” resolve only folders inside the workspace; the agent runs and is confined there; the folder stays fixed for the conversation |
 | FR-23 | Show which tools, MCP servers and skills the agent can use in the current conversation | V1 | Confined profiles list their fixed tools; `desktop` reports live MCP server status, their tools and skills, or says why only a fallback is shown |
+| FR-24 | Show the connected computer's Ataria board (what needs attention today, todos and the digest) and tick items done from the phone | V1 | A ✓ button appears only when that computer's gateway reports an Ataria engine; the sheet groups the board into Needs you, Today, Later, Digest and Done; a tick or untick reaches the engine through the gateway and reverts on failure; the engine is reached only on loopback (D25, `docs/13-ataria.md`) |
 
 ## Quality requirements
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from chintu_adapters import ClaudeAdapter, ClaudeAgentAdapter, CodexAdapter, RuntimeEvidence
 from chintu_adapters.agent_sdk import DEFAULT_MODEL, PROFILE_POLICIES
 
-from . import okf
+from . import ataria as atarias, okf
 from .app import Settings
 from .auth_env import assert_auth_environment
 from .contract import Contract, DEFAULT_CONTRACT
@@ -95,7 +95,8 @@ class OperatorConfig:
             raise ValueError("Selected runtime is unavailable; reviewed auth/protocol/confinement/cancel checks are required")
         settings = Settings(database=self.settings.database, projects=self.settings.projects, notes_dir=self.settings.notes_dir,
             contract_path=self.settings.contract_path, queue_limit=self.settings.queue_limit,
-            runtime_evidence=evidence, login_method=runtime["login_method"], token_ttl_days=self.settings.token_ttl_days)
+            runtime_evidence=evidence, login_method=runtime["login_method"], token_ttl_days=self.settings.token_ttl_days,
+            ataria=self.settings.ataria)
         return settings, adapter
 
     def _selected_agent(self, runtime):
@@ -121,7 +122,7 @@ def load_config(path, contract_path=DEFAULT_CONTRACT):
     if path.stat().st_size > 65536:
         raise ValueError("Operator config exceeds 64 KiB")
     value = json.loads(path.read_text())
-    object_fields(value, ("version", "database", "projects", "runtimes"), ("queue_limit", "notes_dir", "token_ttl_days"))
+    object_fields(value, ("version", "database", "projects", "runtimes"), ("queue_limit", "notes_dir", "token_ttl_days", "ataria"))
     if type(value["version"]) is not int or value["version"] != 1:
         raise ValueError("Operator config version must be 1")
     database = Path(text(value["database"])).expanduser()
@@ -179,5 +180,6 @@ def load_config(path, contract_path=DEFAULT_CONTRACT):
             for key in evidence_fields - {"version", "execution_profiles", "record"}:
                 if type(evidence[key]) is not bool:
                     raise ValueError("Evidence flags must be booleans")
+    ataria = atarias.parse_config(value.get("ataria"), path.parent)
     return OperatorConfig(Settings(database.resolve(), registered, Path(contract_path), queue_limit, notes_dir=notes_dir,
-                                   token_ttl_days=token_ttl_days), runtimes, path.parent)
+                                   token_ttl_days=token_ttl_days, ataria=ataria), runtimes, path.parent)

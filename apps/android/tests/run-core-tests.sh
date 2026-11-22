@@ -11,3 +11,5 @@ JAVA=${JAVA_HOME:+$JAVA_HOME/bin/}java
 "$JAVA" -cp "$TEST_DIR" ChatTranscriptTest
 "$JAVAC" -d "$TEST_DIR" app/src/main/java/ai/chintu/core/SseParser.java tests/SseParserTest.java
 "$JAVA" -cp "$TEST_DIR" SseParserTest
+"$JAVAC" -d "$TEST_DIR" app/src/main/java/ai/chintu/core/AtariaBoard.java tests/AtariaBoardTest.java
+"$JAVA" -cp "$TEST_DIR" AtariaBoardTest

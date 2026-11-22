@@ -38,6 +38,30 @@ This plan brings Ataria into this repository as an optional, public component th
 | `apps/android/` | The Ataria tab |
 | `contracts/` | The Ataria API in `openapi.json`, plus examples |
 
+## The engine API (stage A1)
+
+The gateway calls the engine at the base URL from the optional `ataria` block of `gateway.json`:
+
+```json
+"ataria": {"url": "http://127.0.0.1:8787/ataria/api/v1", "token_file": "ataria.token"}
+```
+
+- The URL must be plain `http` to a loopback address (`127.0.0.1`, `::1` or `localhost`); anything else is refused when the config loads.
+- `token_file` (relative paths resolve beside `gateway.json`) holds one token of 32 to 512 characters. The gateway refuses a token file other users can read, and reads it on every call, so rotation needs no restart. The engine may keep only a SHA-256 of the token.
+- Every call carries `Authorization: Bearer <token>` and `X-Ataria: 1`.
+
+| Engine route | Answer |
+| --- | --- |
+| `GET {url}/status` | `{"latest_date": "YYYY-MM-DD" or null}` |
+| `GET {url}/today[?date=YYYY-MM-DD]` | A board in the `AtariaBoard` shape; `404` when there is none for that day |
+| `POST {url}/done` with `{"done": [uid], "undone": [uid]}` | `{"done", "undone", "done_at"}` |
+
+The phone sees only the gateway's routes, `GET /api/v1/ataria`, `GET /api/v1/ataria/today` and `POST /api/v1/ataria/done`, behind its normal pairing. The gateway keeps only the contract's fields, trims long text, and validates the result before it answers: an engine answer outside the contract is `502`, and an engine that does not answer is `503` and retryable. `GET /api/v1/ataria` always answers, with `enabled: false` when no engine is configured, so the phone shows the ✓ button only where there is a board.
+
+An item and the todo under it may share a uid. A tick applies to the uid, so one tick covers both, and the phone folds such a todo into its item's row.
+
+Push updates (the engine telling the phone that a new board is ready) are not in A1. The phone loads the board when the sheet opens.
+
 ## The profile
 
 The install step writes `ataria.json` with mode `0600`. It runs as `chintu ataria init` or from the tray's setup sheet: it asks a few questions and checks the agent logins. The file sits beside the gateway's `gateway.json` in Chintu's data directory: `~/Library/Application Support/Chintu` on macOS, `$XDG_DATA_HOME/chintu` on Linux. `chintu ataria doctor` re-checks it later.

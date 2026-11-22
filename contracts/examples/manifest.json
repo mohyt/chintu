@@ -5,5 +5,8 @@
   "echo.json": "EchoResponse",
   "error.json": "Error",
   "conversation-created.json": "ConversationCreated",
-  "tool-catalog.json": "ToolCatalog"
+  "tool-catalog.json": "ToolCatalog",
+  "ataria-board.json": "AtariaBoard",
+  "ataria-status.json": "AtariaStatus",
+  "ataria-done.json": "AtariaDoneRequest"
 }

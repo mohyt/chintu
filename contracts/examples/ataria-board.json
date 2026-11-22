@@ -1,0 +1,120 @@
+{
+  "date": "2026-11-22",
+  "title": "Ataria today, Sun 22 Nov 2026",
+  "slot": "morning",
+  "generated_at": "2026-11-22T07:04:11+08:00",
+  "summary": "No P0. One P1: the release review at 10:00. Two todos are due today.",
+  "counts": {
+    "P0": 0,
+    "P1": 1,
+    "P2": 2,
+    "P3": 1,
+    "OK": 0,
+    "open": 4,
+    "done_today": 1
+  },
+  "items": [
+    {
+      "uid": "meetings.cal-release-review-2026-11-22",
+      "lane": "meetings",
+      "kind": "item",
+      "priority": "P1",
+      "group": "open",
+      "title": "10:00 Release review with the platform team",
+      "short_title": "10:00 release review",
+      "done": false,
+      "done_at": null,
+      "due": "2026-11-22",
+      "owner": "Sam",
+      "next": "Read the open release notes before the call",
+      "why": "Two changes still need sign-off before Thursday's release.",
+      "area": "meeting",
+      "parent": null,
+      "links": [
+        {
+          "title": "Invite",
+          "url": "https://calendar.example.com/event/123"
+        }
+      ],
+      "stale": false
+    },
+    {
+      "uid": "work.mail-release-notes-2026-11-21",
+      "lane": "work",
+      "kind": "item",
+      "priority": "P2",
+      "group": "open",
+      "title": "The release notes thread is waiting on your answer to two questions",
+      "short_title": "Release notes questions",
+      "done": false,
+      "done_at": null,
+      "due": "2026-11-22",
+      "owner": "Sam",
+      "next": null,
+      "why": "Asked on Friday; the release is on Thursday.",
+      "area": "product",
+      "parent": null,
+      "links": [
+        {
+          "title": "Thread",
+          "url": "https://mail.example.com/thread/456"
+        }
+      ],
+      "stale": false
+    },
+    {
+      "uid": "work.mail-release-notes-2026-11-21",
+      "lane": "work",
+      "kind": "todo",
+      "priority": "P2",
+      "group": "open",
+      "title": "Reply to the release notes thread with the two open questions",
+      "short_title": "Answer the release notes thread",
+      "done": false,
+      "done_at": null,
+      "due": "2026-11-22",
+      "owner": "Sam",
+      "next": null,
+      "why": null,
+      "area": null,
+      "parent": "work.mail-release-notes-2026-11-21",
+      "links": [],
+      "stale": false
+    },
+    {
+      "uid": "personal.growth-3f9a1c2b",
+      "lane": "personal",
+      "kind": "item",
+      "priority": "P3",
+      "group": "info",
+      "title": "A new open-weight coding model tops two public benchmarks",
+      "short_title": null,
+      "done": false,
+      "done_at": null,
+      "due": null,
+      "owner": null,
+      "next": null,
+      "why": "Relevant to the agent tooling you use every day.",
+      "area": "ai",
+      "parent": null,
+      "links": [
+        {
+          "title": "Article",
+          "url": "https://news.example.com/models"
+        }
+      ],
+      "stale": false
+    },
+    {
+      "uid": "work.mail-expense-report-2026-11-20",
+      "lane": "work",
+      "kind": "todo",
+      "priority": "P2",
+      "group": "done",
+      "title": "Submit the November expense report",
+      "done": true,
+      "done_at": "2026-11-22T08:12:00+08:00",
+      "links": []
+    }
+  ]
+}

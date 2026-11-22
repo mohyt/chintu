@@ -26,7 +26,7 @@ from .errors import ApiError, unavailable
 from .manager import Manager
 from .store import Store
 from .systems import TailscaleDiscovery
-from . import okf, pairing_page
+from . import ataria as atarias, okf, pairing_page
 from . import workspace as workspaces
 from .stream import EventHub, StreamRegistry, frame
 
@@ -49,6 +49,8 @@ class Settings:
     stream_heartbeat_seconds: float = 15
     stream_max_seconds: float = 900
     stream_check_seconds: float = 5
+    # Optional Ataria engine on this machine (docs/13-ataria.md); None hides the Ataria tab on the phone.
+    ataria: atarias.AtariaConfig | None = None
 
 
 DEFAULT_PORT = 8765
@@ -398,6 +400,30 @@ def create_app(settings: Settings, adapter=None, systems_discovery=None):
     @api.get("/capabilities")
     async def capabilities():
         return {"providers": providers()}
+
+    # --- Ataria: the phone's Today board, passed to the separate Ataria engine on loopback. ---
+    engine = atarias.Engine(settings.ataria, contract) if settings.ataria is not None else None
+
+    def ataria_engine():
+        if engine is None:
+            raise ApiError(503, "ataria_unavailable", "Ataria is not set up on this computer.")
+        return engine
+
+    @api.get("/ataria")
+    async def ataria_status():
+        if engine is None:
+            return contract.validate("AtariaStatus", {"enabled": False, "reachable": False, "latest_date": None,
+                                                      "reason": "Ataria is not set up on this computer."})
+        return await engine.status()
+
+    @api.get("/ataria/today")
+    async def ataria_board(request: Request):
+        return await ataria_engine().board(request.query_params.get("date"))
+
+    @api.post("/ataria/done")
+    async def ataria_done(request: Request):
+        value = await body(request, "AtariaDoneRequest")
+        return await ataria_engine().done(value)
 
     @api.get("/systems")
     async def systems():
