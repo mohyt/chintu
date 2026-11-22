@@ -16,4 +16,4 @@ chintu-ataria = "chintu_ataria.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-chintu_ataria = ["schema/*.json", "defaults/**/*.md"]
+chintu_ataria = ["schema/*.json", "defaults/**/*.md", "defaults/web/*"]

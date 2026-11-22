@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ataria</title>
+  <meta name="theme-color" content="#F6F7FA" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0E1424" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail" id="rail">
+    <div class="brand">
+      <span class="mark">Ataria</span>
+      <span class="stamp" id="stamp"></span>
+      <button type="button" class="iconbtn" id="searchBtn" aria-label="Search and filter" aria-expanded="false">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4.5 4.5"/></svg>
+      </button>
+    </div>
+    <div class="tools" id="tools">
+      <div class="search"><input id="q" type="search" placeholder="Search" aria-label="Search items" autocomplete="off"><kbd>/</kbd></div>
+      <div class="chips" id="chips" aria-label="Filter by priority"></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div class="railfoot">
+      <label class="history">Earlier days <select id="history"></select></label>
+      <div class="health" id="health"></div>
+      <div class="ctl"><button type="button" class="btn ghost" id="expandAll">Expand all</button><button type="button" class="btn ghost" id="collapseAll">Collapse all</button></div>
+      <p class="keys"><kbd>/</kbd> search <kbd>1</kbd>–<kbd>8</kbd> sections <kbd>e</kbd> expand <kbd>s</kbd> save</p>
+      <p class="dbnote" id="dbnote" hidden></p>
+    </div>
+  </aside>
+  <main class="page" id="page"></main>
+</div>
+<nav class="tabbar" id="tabbar" aria-label="Sections"></nav>
+<dialog class="sheet" id="more" aria-label="More sections"></dialog>
+<div class="savebar" id="savebar" hidden><span id="saveMsg"></span><button type="button" class="btn ghost" id="discard">Discard</button><button type="button" class="btn primary" id="save">Save</button></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button type="button" id="toastUndo">Undo</button></div>
+<script src="app.js"></script>
+</body>
+</html>
