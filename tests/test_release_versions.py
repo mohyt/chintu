@@ -83,6 +83,24 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             sh("OS=Linux ARCH=amd64; WORK=$(mktemp -d); f=$WORK/other.deb; : > $f; CHINTU_PACKAGE=$f; package_from_file")
 
+    def test_an_existing_or_given_profile_means_no_questions(self):
+        # A fake chintu-desktop records what the installer asked it to do.
+        script = ("T=$(mktemp -d); APP_BIN=$T/cli; printf '#!/bin/sh\\necho \"$*\" >> %s/calls\\n' $T > $APP_BIN; "
+                  "chmod +x $APP_BIN; PROFILE=$T/home/ataria.json; ")
+        # Given a profile elsewhere: copied into place (private), then only checked.
+        out = sh(script + "echo '{}' > $T/mine.json; CHINTU_ATARIA_PROFILE=$T/mine.json; setup_ataria > /dev/null; "
+                 "stat -c %a $PROFILE; cat $T/calls")
+        self.assertEqual(out.splitlines(), ["600", "ataria doctor"])
+        # A profile already in place: checked, never asked about, even with --ataria.
+        out = sh(script + "mkdir -p $T/home; echo '{}' > $PROFILE; CHINTU_ATARIA=1; setup_ataria > /dev/null; cat $T/calls")
+        self.assertEqual(out, "ataria doctor")
+        # No profile and no terminal: no questions either, just the hint.
+        out = sh(script + "CHINTU_ATARIA=0; setup_ataria; [ -f $T/calls ] && cat $T/calls || echo none")
+        self.assertIn("chintu-desktop ataria init", out)
+        self.assertTrue(out.endswith("none"))
+        with self.assertRaises(AssertionError):
+            sh(script + "CHINTU_ATARIA_PROFILE=$T/missing.json; setup_ataria")
+
 
 if __name__ == "__main__":
     unittest.main()

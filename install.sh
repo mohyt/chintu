@@ -12,6 +12,7 @@
 #   --file PATH            install a package you already have        CHINTU_PACKAGE
 #   --force                reinstall the same version, or downgrade  CHINTU_FORCE=1
 #   --ataria / --no-ataria set up Ataria now / skip the question     CHINTU_ATARIA=1|0
+#   --ataria-profile PATH  use this ataria.json; no setup questions   CHINTU_ATARIA_PROFILE
 #   --no-start             install without starting the tray          CHINTU_NO_START=1
 #   GITHUB_TOKEN           only needed while the repository is private
 #
@@ -32,11 +33,13 @@ usage() {
   cat <<'USAGE'
 Install or upgrade Chintu (and its Ataria daily board).
 
-  install.sh [--version X.Y.Z[-rcN] | --pre | --file PATH] [--force] [--ataria | --no-ataria] [--no-start]
+  install.sh [--version X.Y.Z[-rcN] | --pre | --file PATH] [--force]
+             [--ataria | --no-ataria | --ataria-profile PATH] [--no-start]
 
   --version   install that release            --pre        newest release, test releases included
   --file      install a package you have      --force      reinstall the same version, or downgrade
   --ataria    set up Ataria now               --no-ataria  skip the Ataria question
+  --ataria-profile PATH   use an ataria.json you already have; no setup questions
   --no-start  install without starting the tray
 USAGE
 }
@@ -324,10 +327,25 @@ start_tray() {
   esac
 }
 
-# Ataria, the daily board: keep an existing setup, or ask the setup questions.
+# Ataria, the daily board: use a profile you name, keep an existing one, or ask the setup questions.
+# Whenever a profile exists the questions are never asked; `chintu-desktop ataria init` edits it later.
 setup_ataria() {
   local cli="$APP_BIN"
   [ -x "$cli" ] || { warn "cannot find $cli; skipping Ataria"; return 0; }
+  if [ -n "${CHINTU_ATARIA_PROFILE:-}" ]; then
+    local given="${CHINTU_ATARIA_PROFILE/#\~/$HOME}"
+    [ -f "$given" ] || die "--ataria-profile: no such file: $given"
+    if [ "$(cd "$(dirname "$given")" && pwd -P)/$(basename "$given")" != "$(cd "$(dirname "$PROFILE")" 2> /dev/null && pwd -P)/$(basename "$PROFILE")" ]; then
+      mkdir -p "$(dirname "$PROFILE")"
+      if [ -f "$PROFILE" ] && ! cmp -s "$given" "$PROFILE"; then
+        cp -p "$PROFILE" "$PROFILE.$(date +%Y%m%d-%H%M%S).bak"
+        say "Kept your previous Ataria profile as $PROFILE.<date>.bak"
+      fi
+      (umask 077 && cp "$given" "$PROFILE")
+      chmod 600 "$PROFILE"
+      say "Using the Ataria profile from $given"
+    fi
+  fi
   if [ -f "$PROFILE" ]; then
     say "Checking your Ataria setup ($PROFILE)"
     "$cli" ataria doctor || warn "fix the items marked FAIL, then run: chintu-desktop ataria doctor"
@@ -387,6 +405,8 @@ parse_args() {
       --force) CHINTU_FORCE=1 ;;
       --ataria) CHINTU_ATARIA=1 ;;
       --no-ataria) CHINTU_ATARIA=0 ;;
+      --ataria-profile) [ $# -ge 2 ] || die "--ataria-profile needs a path"; CHINTU_ATARIA_PROFILE="$2"; shift ;;
+      --ataria-profile=*) CHINTU_ATARIA_PROFILE="${1#*=}" ;;
       --no-start) CHINTU_NO_START=1 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;

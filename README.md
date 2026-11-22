@@ -190,7 +190,7 @@ chintu-desktop ataria init      # about you, personal life, work, and which agen
 chintu-desktop ataria doctor    # checks the profile, vault, agent sign-ins and secret references
 ```
 
-The installer offers `init` on a first install and runs `doctor` on an upgrade. Ataria's design is in [docs/13-ataria.md](docs/13-ataria.md); in 0.7.0 test releases the scheduled jobs still come from the owner's existing setup and move into Chintu before 0.7.0.
+The installer never asks when a profile already exists: it runs `doctor` instead. To set up a new computer from a profile you already have, pass it to the installer (`… | bash -s -- --ataria-profile ~/ataria.json`); it is copied into place, readable by you alone, and no questions are asked. Otherwise it offers `init` on a first install. Ataria's design is in [docs/13-ataria.md](docs/13-ataria.md); in 0.7.0 test releases the scheduled jobs still come from the owner's existing setup and move into Chintu before 0.7.0.
 
 ## Troubleshooting
 

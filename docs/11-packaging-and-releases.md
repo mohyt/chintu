@@ -78,7 +78,7 @@ The same assets can be published by hand from local builds with
   version first (nothing to do when it is current; `--force` reinstalls or downgrades), stops the
   running tray and gateway before an upgrade, and afterwards checks an existing Ataria profile with
   `chintu-desktop ataria doctor` or, on a first install, offers `chintu-desktop ataria init`
-  (`--ataria` / `--no-ataria` answer that question). It then downloads the asset for the OS and CPU, checks
+  (`--ataria` / `--no-ataria` answer that question). `--ataria-profile PATH` installs an existing `ataria.json` instead, with mode 0600 and a dated backup of any different profile already in place; whenever a profile exists, no setup questions are asked. It then downloads the asset for the OS and CPU, checks
   it against the SHA-256 digest GitHub records for the asset (or the release's `SHA256SUMS`), then
   installs with `apt-get` or copies `Chintu.app` into `/Applications` and clears quarantine. On
   Linux it also runs `chintu-desktop init` and `install-autostart` and starts the tray when a

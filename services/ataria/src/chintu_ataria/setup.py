@@ -490,6 +490,12 @@ def doctor(path=None, out=None, which=shutil.which, home=None):
         for name, secret in (value.get("secrets") or {}).items():
             if secret["store"] == "file":
                 secret_path = Path(secret["ref"]).expanduser()
+                parent = secret_path.parent
+                if parent.is_dir() and not os.access(parent, os.X_OK):
+                    # A folder you cannot enter: the file may belong to a separate service account on purpose.
+                    note("ok", f"secret {name}", f"{secret_path} is in a folder only another account can open "
+                                                 "(not checked)")
+                    continue
                 if not secret_path.is_file():
                     note("fail", f"secret {name}", f"{secret_path} does not exist")
                 elif secret_path.stat().st_mode & 0o077:
