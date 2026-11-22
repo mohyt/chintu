@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chintu.local/schemas/ataria-profile-1.json",
+  "title": "Ataria profile",
+  "description": "Everything personal Ataria needs, kept on the owner's machine and read at run time. Never committed. Secrets are referenced, not stored.",
+  "type": "object",
+  "required": ["schema", "owner", "vault"],
+  "properties": {
+    "schema": {"const": 1},
+    "owner": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"$ref": "#/$defs/short"},
+        "full_name": {"$ref": "#/$defs/short"},
+        "role": {"$ref": "#/$defs/short"},
+        "email": {"$ref": "#/$defs/short"},
+        "timezone": {"type": "string", "pattern": "^[A-Za-z]+(/[A-Za-z0-9_+-]+)*$", "maxLength": 64},
+        "locale": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"},
+        "city": {"$ref": "#/$defs/short"}
+      }
+    },
+    "family": {
+      "type": "array", "maxItems": 20,
+      "items": {
+        "type": "object", "required": ["name", "relation"],
+        "properties": {
+          "name": {"$ref": "#/$defs/short"},
+          "relation": {"$ref": "#/$defs/short"},
+          "school": {"$ref": "#/$defs/short"},
+          "notes": {"$ref": "#/$defs/long"}
+        }
+      }
+    },
+    "work": {
+      "type": "object",
+      "properties": {
+        "company": {"$ref": "#/$defs/short"},
+        "role": {"$ref": "#/$defs/short"},
+        "clients": {"$ref": "#/$defs/names"},
+        "products": {"$ref": "#/$defs/names"},
+        "team": {"$ref": "#/$defs/names"},
+        "github_orgs": {"$ref": "#/$defs/names"}
+      }
+    },
+    "vault": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "morning": {"$ref": "#/$defs/clock"},
+        "midday": {"$ref": "#/$defs/clock"},
+        "catch_up": {"type": "boolean"}
+      }
+    },
+    "agents": {
+      "type": "object",
+      "properties": {
+        "default": {"enum": ["codex", "claude"]},
+        "lanes": {"type": "object", "additionalProperties": {"enum": ["codex", "claude"]}}
+      }
+    },
+    "sources": {
+      "type": "object",
+      "description": "One object per source; each has `enabled` and the source's own settings.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["enabled"],
+        "properties": {"enabled": {"type": "boolean"}}
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "phone": {"type": "boolean"},
+        "recipients": {
+          "type": "array", "maxItems": 20,
+          "items": {
+            "type": "object", "required": ["name", "channel"],
+            "properties": {
+              "name": {"$ref": "#/$defs/short"},
+              "channel": {"enum": ["phone", "whatsapp", "email"]},
+              "address": {"$ref": "#/$defs/short"},
+              "digests": {"type": "array", "items": {"enum": ["morning", "midday", "evening", "month"]}}
+            }
+          }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "description": "Free-text notes templates insert where a field does not fit: how to judge work items, family routines, writing style.",
+      "maxProperties": 50,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,40}$"},
+      "additionalProperties": {"$ref": "#/$defs/long"}
+    },
+    "secrets": {
+      "type": "object",
+      "description": "Where each secret lives. Never the secret itself.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,40}$"},
+      "additionalProperties": {
+        "type": "object", "required": ["store", "ref"], "additionalProperties": false,
+        "properties": {
+          "store": {"enum": ["keychain", "secret-service", "file"]},
+          "ref": {"type": "string", "minLength": 1, "maxLength": 1024}
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "properties": {"deny_patterns_file": {"type": ["string", "null"], "maxLength": 1024}}
+    }
+  },
+  "$defs": {
+    "short": {"type": "string", "minLength": 1, "maxLength": 300},
+    "long": {"type": "string", "maxLength": 8000},
+    "names": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/short"}},
+    "clock": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+  }
+}

@@ -1,18 +1,21 @@
 PYTHON ?= python3
-export PYTHONPATH := $(CURDIR)/services/gateway/src:$(CURDIR)/packages/agent-adapters/src:$(PYTHONPATH)
+export PYTHONPATH := $(CURDIR)/services/gateway/src:$(CURDIR)/services/ataria/src:$(CURDIR)/packages/agent-adapters/src:$(PYTHONPATH)
 export PYTHONDONTWRITEBYTECODE := 1
 
-.PHONY: bootstrap test contract test-gateway test-adapters test-integration test-android-core demo android-build inspect
+.PHONY: bootstrap test contract test-ataria test-gateway test-adapters test-integration test-android-core demo android-build inspect
 
 bootstrap:
 	uv venv --allow-existing --python 3.12
 	uv pip sync --require-hashes requirements-dev.lock
-	uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway -e apps/desktop
+	uv pip install --no-build-isolation --no-deps -e packages/agent-adapters -e services/gateway -e services/ataria -e apps/desktop
 
-test: contract test-gateway test-adapters test-integration test-android-core
+test: contract test-ataria test-gateway test-adapters test-integration test-android-core
 
 contract:
 	$(PYTHON) scripts/check_contract.py
+
+test-ataria:
+	$(PYTHON) -m unittest discover -s services/ataria/tests -v
 
 test-gateway:
 	$(PYTHON) -m unittest discover -s services/gateway/tests -v
