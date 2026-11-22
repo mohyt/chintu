@@ -227,6 +227,7 @@ def make_handler(engine, base, token_hash_file, allowed_logins=(), static=None):
     static = Path(static or web_root())
     allowed_logins = set(allowed_logins or ())
     config = dashboard_config(engine.profile)
+    pages = {item.name: item for item in static.iterdir() if item.is_file() and not item.name.startswith(".")}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ataria"
@@ -324,9 +325,9 @@ def make_handler(engine, base, token_hash_file, allowed_logins=(), static=None):
                     front, _ = okf.read(found)
                     return self.send(200, engine.contract_board(front, engine.apply_done(front.get("items") or [], engine.done_map())))
                 return self.send(404, {"error": "not found"})
-            name = "index.html" if path in ("/", "") else path.lstrip("/")
-            found = (static / name).resolve()
-            if not found.is_relative_to(static.resolve()) or not found.is_file():
+            # Only the files the web folder holds, by name: a request never builds a path.
+            found = pages.get("index.html" if path in ("/", "") else path.lstrip("/"))
+            if found is None:
                 return self.send(404, {"error": "not found"})
             return self.send(200, found.read_bytes(), TYPES.get(found.suffix, "application/octet-stream"))
 
