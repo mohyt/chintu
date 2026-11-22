@@ -8,6 +8,7 @@ Chintu (Conversational Hands-free Interface to Networked Terminals & Utilities) 
 | --- | --- |
 | `apps/android/` | Kotlin app (API 31+): speech, audio routing, pairing, activity and note modes; `tools/android.py` provisions a workspace-local SDK and Gradle |
 | `apps/desktop/` | Python tray app for macOS and GNOME: phone presence, QR pairing, gateway supervision, Tailscale Serve, revocation |
+| `services/ataria/` | Ataria engine (D25, `docs/13-ataria.md`): profile schema and loader, template renderer, leak check, bundled prompt templates in `defaults/`. Personal values come only from the owner's local `ataria.json`; `examples/profile.sam.json` is fictional |
 | `services/gateway/` | FastAPI gateway on loopback with SQLite task store, pairing, local-proof endpoints and voice notes |
 | `packages/agent-adapters/` | Claude Agent SDK adapter, execution-profile confinement and the scripted fixture |
 | `contracts/` | OpenAPI 3.1 contract, adapter protocol and wire examples; `scripts/check_contract.py` validates them |
@@ -37,7 +38,7 @@ scripts/package/build-apk.sh | build-dmg.sh | build-deb.sh
 
 ## Versions and Releases
 
-The root `VERSION` file is the single version; the Android `versionName`, the three `pyproject.toml` files and `chintu_desktop.__version__` must match it. Tagging `v<version>` builds and publishes the packages. See `docs/11-packaging-and-releases.md`.
+The root `VERSION` file is the single version; the Android `versionName`, the four `pyproject.toml` files and `chintu_desktop.__version__` must match it. Tagging `v<version>` builds and publishes the packages. See `docs/11-packaging-and-releases.md`.
 
 ## Commits and Pull Requests
 
@@ -46,3 +47,5 @@ Concise imperative subjects (`Harden local endpoints`, `docs: clarify cancellati
 ## Security and Scope
 
 Never commit credentials, keystores, dictated notes, databases or raw audio; `.gitignore` covers `var/`, `*.jks`, `notes/` and `*.sqlite3`. Local endpoints require the per-start secret in `var/local.secret`; `inspect` and `develop` profiles are workspace-confined through the PreToolUse hook. Keep task-scoped authorisation and the distinction between stopping speech and cancelling execution as the design documents specify. Report vulnerabilities as described in `SECURITY.md`.
+
+Ataria templates and code must hold no personal information: a name, client, host, path, number or address that belongs to a real person is a profile value (`{{ owner.name }}`), never text. `services/ataria/tests` scans the package for email addresses, phone numbers, home paths and tailnet hosts; set `ATARIA_DENY_FILE` to a local list of your own names and hosts (never committed) to check those too before pushing.

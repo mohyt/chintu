@@ -8,7 +8,7 @@ Chintu ships as three installable packages, published only on GitHub Releases fo
 | `Chintu-<version>-<arch>.dmg` | macOS 13+ | `scripts/package/build-dmg.sh` | `Chintu.app`: menu-bar tray, gateway daemon and the Claude Agent SDK with its bundled CLI, frozen with PyInstaller |
 | `chintu-desktop_<version>_<arch>.deb` | Ubuntu 24.04 and 26.04, Debian 13 (amd64, arm64) | `scripts/package/build-deb.py` | Tray, gateway and vendored wheels; a venv is created under `/opt/chintu/venv` on install |
 
-The version comes from the root `VERSION` file. The Android `versionName`, the three Python
+The version comes from the root `VERSION` file. The Android `versionName`, the four Python
 packages and the release tag `v<version>` must all match it; the release workflow refuses a
 tag that does not.
 
@@ -51,7 +51,7 @@ secrets, uploaded once with `scripts/package/set-signing-secrets.sh`:
 
 ## Publishing a release
 
-1. Bump `VERSION`, the Android `versionCode`, the three `pyproject.toml` versions and
+1. Bump `VERSION`, the Android `versionCode`, the four `pyproject.toml` versions and
    `chintu_desktop.__version__`; write `docs/releases/v<version>.md`.
 2. Commit and push, then tag: `git tag v<version> && git push origin v<version>`.
 3. The `Release packages` workflow (`.github/workflows/release.yml`) builds the APK on Ubuntu,

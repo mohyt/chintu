@@ -64,30 +64,45 @@ Push updates (the engine telling the phone that a new board is ready) are not in
 
 ## The profile
 
-The install step writes `ataria.json` with mode `0600`. It runs as `chintu ataria init` or from the tray's setup sheet: it asks a few questions and checks the agent logins. The file sits beside the gateway's `gateway.json` in Chintu's data directory: `~/Library/Application Support/Chintu` on macOS, `$XDG_DATA_HOME/chintu` on Linux. `chintu ataria doctor` re-checks it later.
+Everything personal lives in `ataria.json` on the owner's machine and is read when a run starts; the repository holds only code and templates. The install step writes it with mode `0600` (`chintu ataria init`, or the tray's setup sheet), beside the gateway's `gateway.json` in Chintu's data directory: `~/Library/Application Support/Chintu` on macOS, `$XDG_DATA_HOME/chintu` on Linux. `$ATARIA_PROFILE` overrides the location. The engine refuses a profile other users can read.
 
-```json
-{
-  "schema": 1,
-  "owner": {"name": "Sam", "timezone": "Asia/Singapore", "locale": "en-GB"},
-  "vault": "~/vaults/main",
-  "schedule": {"morning": "07:00", "midday": "13:30", "catch_up": true},
-  "agents": {"default": "codex", "work": "claude"},
-  "sources": {
-    "feeds": {"enabled": true, "packs": ["world", "tech", "ai"], "extra": []},
-    "google": {"enabled": true, "via": "codex-connector"},
-    "github": {"enabled": false, "orgs": []},
-    "notes": {"enabled": true}
-  },
-  "work": {"clients": [], "products": []},
-  "delivery": {"phone": true, "channels": []},
-  "privacy": {"deny_patterns_file": null}
-}
-```
+The schema is `services/ataria/src/chintu_ataria/schema/profile.schema.json`, and `services/ataria/examples/profile.sam.json` is a complete fictional example. In outline:
 
-- Every key is optional except `schema`, `owner.name` and `vault`. Readers ignore unknown keys and keep them when they rewrite the file.
-- Lists such as clients, products and recipients start empty. The owner adds to them in the setup sheet or the file.
-- `privacy.deny_patterns_file` points at a local list of strings, such as family names or account numbers, that must never appear in anything the engine sends off the machine. The list itself stays local.
+| Key | Holds |
+| --- | --- |
+| `owner` | `name` (required), `full_name`, `role`, `email`, `timezone`, `locale`, `city` |
+| `family` | People the household lanes know about: `name`, `relation`, optional `school` and `notes` |
+| `work` | `company`, `role`, `clients`, `products`, `team`, `github_orgs` |
+| `vault` | The vault folder (required) |
+| `schedule`, `agents` | Run times and catch-up; which agent each lane uses |
+| `sources` | One object per source with `enabled` and that source's settings, such as feed packs or mail labels |
+| `delivery` | `phone`, and `recipients` with name, channel, address and which digests they get |
+| `context` | Free-text notes the templates insert where a field does not fit: how to judge work items, family routines, writing style, known alert feeds |
+| `secrets` | Where each secret lives (`keychain`, `secret-service` or a `file`) and its reference. Never the secret itself |
+| `privacy` | `deny_patterns_file`, a local list of strings that must never leave the machine or reach the repository |
+
+Unknown keys are allowed and kept, so a newer profile works with older code. Agents keep their own logins (Claude Code, Codex and their connectors); the profile never holds a password or token.
+
+## Templates
+
+Prompts and skills under `services/ataria/defaults/` are templates, filled from the profile at run time (`chintu_ataria.templates`):
+
+| Syntax | Meaning |
+| --- | --- |
+| `{{ owner.name }}` | A profile value. A missing one stops the run with a message naming every missing field |
+| `{{ owner.role? }}` | Optional: empty when missing |
+| `{{ work.clients \| join }}` | A list joined with commas; also `\| names`, `\| bullets`, `\| json` |
+| `{{#if family}} … {{else}} … {{/if}}` | A section kept only when the value is present and not empty |
+| `{{include skills/work.md}}` | Another template from the same folder, up to three levels deep |
+| `{{ATARIA_ROOT}}`, `{{NOW}}` | Upper-case runtime values from the engine (paths, times, the lane), never from the profile |
+
+A test renders every bundled template with the example profile, so a template that refers to a field the schema does not have fails CI.
+
+## Keeping personal information out
+
+- Templates and code never contain a real name, client, host, path, phone number or address; those are profile values.
+- `services/ataria/tests` scans the package for email addresses (other than `example.com`), phone numbers, home folder paths and tailnet host names.
+- The owner keeps a local deny list of their own names, clients and hosts (`chintu-ataria leaks --deny FILE`, or `ATARIA_DENY_FILE` for the tests) and runs it before pushing. The list is never committed, and a finding names only the list's line number, so a CI log never repeats an entry.
 
 ## How a run works
 
@@ -122,27 +137,31 @@ This is weaker than separate accounts. A Linux owner who wants the stronger mode
 
 ## Migration from the prototype
 
+The engine is moved from the prototype, not rewritten, so the owner's board keeps behaving the same:
+
 1. The prototype keeps running unchanged on its machine.
-2. **API first.** Stage A1 defines the Ataria API in the contract and builds the phone tab against it. The prototype's existing app server implements the same API, so the owner gets the phone tab before the public engine exists.
-3. The public engine reaches parity in stages. The owner then switches that machine to it one job at a time. The machine's private data and profile stay local, and only generic improvements come back here.
-4. The prototype repository is archived once every job has moved.
+2. **API first.** Stage A1 defines the Ataria API in the contract and builds the phone tab against it. The prototype's app server implements the same API, so the owner gets the phone tab before the move.
+3. **Move, don't copy history.** Code comes into `services/ataria` as new files, without the prototype's git history. Each prompt and skill becomes a template: every personal value becomes a profile field or a `context` note, and the leak check must pass with the owner's deny list before each push.
+4. The owner's machine switches to the moved engine one lane at a time, with its own `ataria.json`. Its private data stays local.
+5. The prototype repository is archived once every lane has moved, or kept only for the owner's private configuration.
 
 ## Stages
 
 | Stage | Scope | Done when |
 | --- | --- | --- |
-| A1 | Ataria API in the contract; gateway pass-through and event relay; the phone Ataria tab (board, todos, digest, tick done) | The phone shows the prototype's board through the gateway and ticks round-trip |
-| A2 | `services/ataria` core: profile, `init`/`doctor`, prompt templating, `routine` profile, scheduler with catch-up, feeds job, merge to a board; the tray's `AtariaSupervisor` | Fresh macOS and Linux installs produce a feeds-only board with no setup beyond `init` |
-| A3 | Google, work and notes jobs; todos; done ticks; month close | The owner's morning board from the engine matches the prototype's on the same day |
-| A4 | GitHub and meetings jobs; the plugin interface for messaging and finance | One plugin runs from outside the core package |
+| A1 | Ataria API in the contract; gateway pass-through; the phone's Today sheet (board, todos, digest, tick done) | The phone shows the prototype's board through the gateway and ticks round-trip |
+| A2 | Profile schema and loader, template renderer, leak check; the shared lane prompt as the first template | Every bundled template renders for the fictional profile; the package passes the leak check |
+| A3 | Move the engine: runner, merge, app server, month close, OKF helpers; lane prompts and skills as templates, one lane per change | The owner's machine runs each moved lane from this repository with the same board as before |
+| A4 | Portability: the engine's own scheduler with catch-up, `init`/`doctor`, the tray's `AtariaSupervisor`, macOS | A fresh macOS install produces a feeds-only board with no setup beyond `init` |
+| A5 | Plugins for messaging and finance; the optional Linux isolation guide (one account per lane) | One plugin runs from outside the core package |
 
 Every stage adds requirement rows to `docs/01-requirements.md` and validation rows to `docs/06-delivery-plan.md`.
 
 ## Guards in CI
 
 - The existing secret scan runs on every change.
-- A **template check** fails if a bundled prompt, skill, flow or manifest contains a literal that should come from the profile: an email address, a phone number, a home path, or a name or host on a locally configured deny list. The repository has no default list; CI checks the patterns only.
-- Tests use a fictional profile ("Sam" in Singapore) and fixture sources, never real data.
+- The Ataria tests scan the package for personal values and render every template with the fictional profile (above).
+- Tests use the fictional profile ("Sam" in Singapore) and fixture sources, never real data.
 
 ## Open questions
 

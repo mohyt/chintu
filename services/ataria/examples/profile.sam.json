@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "owner": {
+    "name": "Sam",
+    "full_name": "Sam Example",
+    "role": "Head of Delivery",
+    "email": "sam@example.com",
+    "timezone": "Asia/Singapore",
+    "locale": "en-GB",
+    "city": "Singapore"
+  },
+  "family": [
+    {"name": "Alex", "relation": "partner"},
+    {"name": "Robin", "relation": "child", "school": "Example Primary School"}
+  ],
+  "work": {
+    "company": "Example Systems",
+    "role": "Head of Delivery",
+    "clients": ["Northwind Bank", "Contoso Telecom"],
+    "products": ["Ledgerline", "Signal Desk"],
+    "team": ["Priya", "Tom"],
+    "github_orgs": ["example-systems"]
+  },
+  "vault": "~/vaults/main",
+  "schedule": {"morning": "07:00", "midday": "13:30", "catch_up": true},
+  "agents": {"default": "codex", "lanes": {"work": "claude", "meetings": "claude"}},
+  "sources": {
+    "feeds": {"enabled": true, "packs": ["world", "tech", "ai"]},
+    "google": {"enabled": true, "via": "codex-connector", "labels": {"reading": "Reading/Tech"}},
+    "github": {"enabled": false},
+    "notes": {"enabled": true}
+  },
+  "delivery": {
+    "phone": true,
+    "recipients": [{"name": "Sam", "channel": "phone", "digests": ["morning", "midday"]}]
+  },
+  "context": {
+    "work": "Client escalations and anything blocking a release come first. Internal newsletters are information only.",
+    "family": "School notices about fees or forms are todos; activity photos are information only.",
+    "style": "Short sentences. Lead with what needs doing."
+  },
+  "secrets": {
+    "statements": {"store": "keychain", "ref": "ataria/statements"}
+  },
+  "privacy": {"deny_patterns_file": null}
+}
