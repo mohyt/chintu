@@ -66,6 +66,17 @@ class UserMessage:
 
 
 @dataclass
+class StreamEvent:
+    uuid: str
+    session_id: str
+    event: dict
+    parent_tool_use_id: str | None = None
+
+
+STREAMED = "Streaming reply, sentence by sentence. " * 30
+
+
+@dataclass
 class ResultMessage:
     subtype: str
     is_error: bool
@@ -122,6 +133,22 @@ class ClaudeSDKClient:
         self.disconnected = True
         self.connected = False
 
+    async def get_mcp_status(self) -> dict:
+        if not self.connected:
+            raise CLIConnectionError("Not connected. Call connect() first.")
+        return {"mcpServers": [
+            {"name": "github", "status": "connected", "scope": "user",
+             "tools": [{"name": "get_issue", "description": "Get an issue"}, {"name": "list_prs"}]},
+            {"name": "calendar", "status": "needs-auth", "scope": "claudeai"},
+            {"name": "odd", "status": "rebooting"},
+        ]}
+
+    async def get_server_info(self) -> dict | None:
+        if not self.connected:
+            raise CLIConnectionError("Not connected. Call connect() first.")
+        return {"commands": [{"name": "review", "description": "Review the current diff"},
+                             {"name": "compact", "description": ""}, {"description": "nameless"}]}
+
     async def receive_response(self):
         session = self.options.kwargs.get("resume") or SESSION
         text = self.prompt or ""
@@ -129,7 +156,8 @@ class ClaudeSDKClient:
         if text == "[no-init]":
             yield ResultMessage("success", False, session, "Reply without an init message.")
             return
-        yield SystemMessage("init", {"session_id": session, "model": "fake-model", "tools": ["Read"]})
+        yield SystemMessage("init", {"session_id": session, "model": "fake-model",
+                                     "tools": ["Read", "Bash", "mcp__github__get_issue"]})
         if text == "[die]":
             return
         if text == "[raise]":
@@ -150,6 +178,18 @@ class ClaudeSDKClient:
             return
         if text == "[fail]":
             yield ResultMessage("error_during_execution", True, session, None)
+            return
+        if text == "[stream]" and self.options.kwargs.get("include_partial_messages"):
+            # Raw API stream events: only top-level text deltas belong to the reply.
+            yield StreamEvent("s0", session, {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}})
+            yield StreamEvent("sub", session, {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "SUBAGENT"}}, "t9")
+            yield StreamEvent("json", session, {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "{"}})
+            for start in range(0, len(STREAMED), 10):
+                yield StreamEvent(f"d{start}", session, {"type": "content_block_delta", "index": 0,
+                                                         "delta": {"type": "text_delta", "text": STREAMED[start:start + 10]}})
+            yield StreamEvent("stop", session, {"type": "content_block_stop", "index": 0})
+            yield AssistantMessage([TextBlock(STREAMED)], session_id=session)
+            yield ResultMessage("success", False, session, STREAMED)
             return
         reply = "Fake reply: " + text
         yield AssistantMessage([TextBlock("Looking at the workspace first.")], session_id=session)

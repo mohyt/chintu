@@ -27,7 +27,8 @@ from typing import AsyncIterator
 import uuid
 
 from .confinement import PROFILE_TOOLS, workspace_hook
-from .types import AdapterCapabilities, AdapterEvent, TaskCommand, bounded_text, result
+from .types import (AdapterCapabilities, AdapterEvent, BUILTIN_TOOLS, TaskCommand, bounded_text, builtin_tools,
+                    result, tool_catalog)
 
 
 PROVIDER = "claude-agent"
@@ -122,6 +123,14 @@ def speech_summary(text: str, limit: int = 600) -> str:
     return cut.rstrip() + "…"
 
 
+def _chunks(text: str, limit: int = 2000):
+    """Consecutive pieces of ``text`` of at most ``limit`` UTF-8 bytes, never splitting a character."""
+    while text:
+        chunk = bounded_text(text, limit) or text[0]
+        yield chunk
+        text = text[len(chunk):]
+
+
 def final_result(summary: str, *, error: str | None = None, partial_effects: bool = False) -> dict:
     payload = result(summary, error=error, partial_effects=partial_effects)
     payload["speech_text"] = speech_summary(payload["summary"]) or payload["summary"]
@@ -146,7 +155,9 @@ class ClaudeAgentAdapter:
                  profiles: tuple[str, ...] = DEFAULT_PROFILES, load_user_settings: bool = True,
                  max_turns: int | None = None, timeout_seconds: float = 1800, stop_seconds: float = 10,
                  max_progress_events: int = 150, max_output_events: int = 60, sdk=None,
-                 persona: str | None = DEFAULT_PERSONA) -> None:
+                 persona: str | None = DEFAULT_PERSONA, probe_seconds: float = 10,
+                 catalog_seconds: float = 300, stream_text: bool = True, max_delta_events: int = 800,
+                 max_delta_bytes: int = 256 * 1024, delta_chars: int = 400, delta_seconds: float = 0.4) -> None:
         self.executable = executable
         self.persona = persona
         self.model = model
@@ -161,6 +172,17 @@ class ClaudeAgentAdapter:
         self._clients: dict[str, object] = {}
         self._active: set[str] = set()
         self._cancelled: set[str] = set()
+        # Reply text streams to the phone as ``output_delta`` events, batched by size or time.
+        self.stream_text = stream_text
+        self.max_delta_events = max_delta_events
+        self.max_delta_bytes = max_delta_bytes
+        self.delta_chars = delta_chars
+        self.delta_seconds = delta_seconds
+        self.probe_seconds = probe_seconds
+        self.catalog_seconds = catalog_seconds
+        # Tool names each profile's last session announced in its init message, and recent probe results.
+        self._seen_tools: dict[str, list[str]] = {}
+        self._catalogs: dict[tuple[str, str], tuple[float, dict]] = {}
         if "desktop" in self.profiles:
             log.warning("claude-agent desktop profile enabled: bypassPermissions, no workspace confinement")
 
@@ -249,6 +271,8 @@ class ClaudeAgentAdapter:
             options["system_prompt"] = {"type": "preset", "preset": "claude_code", "append": self.persona}
         if command.provider_session_id:
             options["resume"] = command.provider_session_id
+        if self.stream_text:
+            options["include_partial_messages"] = True
         if self.max_turns is not None:
             options["max_turns"] = self.max_turns
         executable = self.resolved_executable()
@@ -256,7 +280,85 @@ class ClaudeAgentAdapter:
             options["cli_path"] = executable
         return sdk.ClaudeAgentOptions(**options)
 
+    # -- tool catalog -----------------------------------------------------
+
+    def _builtin_names(self, profile: str) -> list[str]:
+        seen = [name for name in self._seen_tools.get(profile, []) if not name.startswith("mcp__")]
+        return seen or list(BUILTIN_TOOLS)
+
+    async def tools(self, project_path: str, execution_profile: str) -> dict:
+        """What the agent can use under ``execution_profile``. Confined profiles have a fixed list;
+        ``desktop`` asks Claude Code itself (MCP servers, their tools, skills), cached for a few minutes."""
+        caps = self.capabilities()
+        if not caps.available or execution_profile not in caps.execution_profiles:
+            return tool_catalog("static", reason="This execution profile is not enabled for the claude-agent runtime.")
+        policy = PROFILE_POLICIES[execution_profile]
+        if policy.tools is not None:
+            return tool_catalog("static", builtin_tools(policy.tools), reason=(
+                f"The {execution_profile} profile is confined to the working directory. MCP servers, connectors, "
+                "skills and web tools need the desktop profile."))
+        key = (execution_profile, str(project_path))
+        now = asyncio.get_running_loop().time()
+        cached = self._catalogs.get(key)
+        if cached is not None and now - cached[0] < self.catalog_seconds:
+            return {**cached[1], "source": "cached"}
+        try:
+            catalog = await asyncio.wait_for(self._probe(Path(project_path).resolve(strict=True), execution_profile),
+                                             self.probe_seconds)
+        except Exception as error:
+            # A probe failure must not hide what is known: fall back to the tools the last session announced.
+            log.warning("tool probe failed: %s", type(error).__name__)
+            seen = self._seen_tools.get(execution_profile)
+            tools = builtin_tools(self._builtin_names(execution_profile)) + [
+                {"name": name, "kind": "mcp", "server": name.split("__")[1] if name.count("__") >= 2 else None}
+                for name in seen or () if name.startswith("mcp__")]
+            return tool_catalog("cached" if seen else "static", tools, reason=(
+                f"Couldn't ask Claude Code for its live tool list ({type(error).__name__}). Showing "
+                + ("the tools the last session announced." if seen else "the built-in tools only.")))
+        self._catalogs[key] = (now, catalog)
+        return catalog
+
+    async def _probe(self, project: Path, profile: str) -> dict:
+        """Start Claude Code without sending a prompt, read its MCP status and commands, and stop it."""
+        sdk = self._sdk()
+        command = TaskCommand("tools", "tools", str(project), "", profile)
+        client = sdk.ClaudeSDKClient(options=self.build_options(command, project, sdk))
+        try:
+            await client.connect()
+            status = await client.get_mcp_status()
+            info = await client.get_server_info() or {}
+        finally:
+            await self._disconnect(client)
+        tools, servers = builtin_tools(self._builtin_names(profile)), []
+        for server in (status.get("mcpServers") if isinstance(status, dict) else None) or []:
+            if not isinstance(server, dict) or not isinstance(server.get("name"), str):
+                continue
+            name = server["name"]
+            listed = [tool for tool in server.get("tools") or [] if isinstance(tool, dict) and isinstance(tool.get("name"), str)]
+            servers.append({"name": name, "status": server.get("status"), "tools": len(listed)})
+            for tool in listed:
+                full = tool["name"] if tool["name"].startswith("mcp__") else f"mcp__{name}__{tool['name']}"
+                tools.append({"name": full, "kind": "mcp", "server": name, "description": tool.get("description")})
+        commands = info.get("commands") if isinstance(info, dict) else None
+        skills = [{"name": entry.get("name"), "description": entry.get("description")}
+                  for entry in commands or [] if isinstance(entry, dict)]
+        return tool_catalog("probe", tools, servers, skills)
+
     # -- execution --------------------------------------------------------
+
+    @staticmethod
+    def _stream_text(sdk, message) -> tuple[str | None, bool]:
+        """(top-level reply text in a raw stream event, whether the event ends a block)."""
+        kind = getattr(sdk, "StreamEvent", None)
+        if kind is None or not isinstance(message, kind) or message.parent_tool_use_id:
+            return None, False
+        event = message.event if isinstance(message.event, dict) else {}
+        if event.get("type") in ("content_block_stop", "message_stop"):
+            return None, True
+        delta = event.get("delta") if event.get("type") == "content_block_delta" else None
+        if isinstance(delta, dict) and delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+            return delta["text"], False
+        return None, False
 
     async def cancel(self, attempt_id: str) -> None:
         if attempt_id not in self._active:
@@ -296,6 +398,7 @@ class ClaudeAgentAdapter:
         terminal = None
         final_text = ""
         progress_count = output_count = 0
+        streamed, streamed_events, streamed_bytes, last_flush = "", 0, 0, 0.0
         notes: list[str] = []
         effects_possible = command.execution_profile != "inspect"
         try:
@@ -335,6 +438,9 @@ class ClaudeAgentAdapter:
                     reported = message.data.get("session_id") if isinstance(message.data, dict) else None
                     if message.subtype != "init":
                         reported = None
+                    elif isinstance(message.data, dict) and isinstance(message.data.get("tools"), list):
+                        self._seen_tools[command.execution_profile] = [
+                            name for name in message.data["tools"] if isinstance(name, str)][:1000]
                 if isinstance(reported, str) and reported and not started:
                     session = reported
                     started = True
@@ -344,6 +450,27 @@ class ClaudeAgentAdapter:
                     break
                 if not started:
                     continue
+                piece, block_end = self._stream_text(sdk, message)
+                if piece is not None or block_end:
+                    # Partial text is held briefly so the phone gets readable pieces, not single tokens.
+                    room = streamed_events < self.max_delta_events and streamed_bytes < self.max_delta_bytes
+                    if piece and room:
+                        streamed += piece
+                    now = asyncio.get_running_loop().time()
+                    if streamed and (block_end or len(streamed) >= self.delta_chars or now - last_flush >= self.delta_seconds):
+                        for chunk in _chunks(streamed):
+                            streamed_events += 1
+                            streamed_bytes += len(chunk.encode("utf-8"))
+                            yield AdapterEvent("output_delta", {"text": chunk}, session)
+                        streamed, last_flush = "", now
+                    continue
+                if streamed:
+                    # A finished message or tool call closes any streamed block left open.
+                    for chunk in _chunks(streamed):
+                        streamed_events += 1
+                        streamed_bytes += len(chunk.encode("utf-8"))
+                        yield AdapterEvent("output_delta", {"text": chunk}, session)
+                    streamed = ""
                 pending = []
                 if isinstance(message, sdk.AssistantMessage) and not message.parent_tool_use_id:
                     texts = []
