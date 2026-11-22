@@ -79,7 +79,9 @@ class Prompter:
     def _read(self, prompt):
         if self.answers is not None:
             self.stdout.write(prompt)
-            value = self.answers.pop(0) if self.answers else ""
+            if not self.answers:
+                raise EOFError("the scripted answers ran out")
+            value = self.answers.pop(0)
             self.stdout.write(value + "\n")
             return value
         self.stdout.write(prompt)
