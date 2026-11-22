@@ -1,6 +1,6 @@
 # Ataria in Chintu
 
-Design v0.2 · 22 November 2026 · Decision D25 · Status: proposed plan, not implemented
+Design v0.3 · 22 November 2026 · Decision D25 · Status: A1, A2 and the dashboard (A1b) built; A3 onwards planned
 
 Ataria runs scheduled agent jobs. They read the owner's sources (mail, calendar, feeds, code hosts, notes), write what they find into the OKF vault, and merge it into one daily board: what needs attention today, open todos, and an outside-world digest. Today Ataria is the owner's private prototype on one Linux machine. Its prompts contain names and sources, systemd schedules it, and each job runs as a separate Linux account.
 
@@ -61,6 +61,53 @@ The phone sees only the gateway's routes, `GET /api/v1/ataria`, `GET /api/v1/ata
 An item and the todo under it may share a uid. A tick applies to the uid, so one tick covers both, and the phone folds such a todo into its item's row.
 
 Push updates (the engine telling the phone that a new board is ready) are not in A1. The phone loads the board when the sheet opens.
+
+## Two parts: the runtime and the dashboard
+
+Ataria has two parts, and a computer can have either or both:
+
+- **The Ataria runtime** runs the jobs: the profile (`ataria.json`), the schedule, the agent runs, the vault and the done ticks. It runs on one computer per person, Linux or macOS. All personal data stays on that computer.
+- **The Ataria dashboard** shows the result: the Today checklist, the digest, and the Work, Finance, Kids, Growth, Home and Month views, with past days and the full notes behind each item. Ticking an item anywhere marks it done everywhere, because every tick goes to the one runtime.
+
+**The dashboard always comes from the computer that runs the runtime.** That computer's gateway serves it; every other device only displays it, over the Tailscale connection it is already paired on. Nothing is copied to the other devices.
+
+| Where the runtime runs | That computer's tray | Another computer's tray | Phone |
+| --- | --- | --- | --- |
+| Computer A | Opens A's dashboard | Opens A's dashboard once paired with A | Shows A's, from the gateway that reports Ataria |
+| Moved to computer B | Opens A's dashboard once A is paired with B | Opens its own | Shows B's |
+
+Moving the runtime is a move, not a switch: copy `ataria.json`, the vault and the ticks to the new computer, install there with the runtime, then remove the profile from the old one. Two runtimes at once would build two separate boards.
+
+### The dashboard (stage A1b)
+
+The dashboard is the engine's own web page, served through the gateway:
+
+| Route | Who | What |
+| --- | --- | --- |
+| `POST /api/v1/ataria/link` | A paired phone or computer (bearer token) | `{"path": "/ataria/open?code=…", "expires_in": 60}`, in the contract as `AtariaDashboardLink` |
+| `POST /local/ataria/link` | The tray on this computer (local proof) | The same, for `http://127.0.0.1:<port>` |
+| `GET /ataria/open?code=…` | The browser | Uses the code up, sets the session cookie and redirects to `/ataria/` |
+| `GET`, `POST`, `DELETE /ataria/<path>` | The browser, with the cookie | Passed to the engine's web root on loopback with the engine token |
+
+- A code works once, for 60 seconds. The session cookie is `HttpOnly`, `SameSite=Strict`, limited to `/ataria/`, `Secure` except on loopback, and lasts 12 hours. Sessions are kept in memory as hashes only, so a gateway restart signs everyone out.
+- Revoking the device that opened a session ends that session on its next request.
+- Writes must carry `X-Ataria: 1`, which a cross-site form cannot send. Paths are checked segment by segment and cannot leave the engine's web root.
+- Every page carries `no-store`, `nosniff`, `X-Frame-Options: DENY` and a content security policy that allows only this origin (plus Google Fonts for styles and fonts). A content type outside a short list is served as `application/octet-stream`.
+- The engine's web root defaults to the `url` of the `ataria` block without its `/api/v1`; an optional `web_url` (loopback `http` only) overrides it.
+
+The phone's Today sheet has **Open the full dashboard**, which opens the link in the browser. The tray menu has **Open Ataria dashboard** when this computer runs Ataria, or **Open Ataria dashboard (name)** when it is paired with the computer that does.
+
+### Pairing a computer with the one that runs Ataria
+
+A computer is paired the way a phone is, gets its own token and appears in the other computer's list of paired devices, where it can be revoked:
+
+```
+ssh that-computer chintu-desktop pairing-code | chintu-desktop ataria connect -
+chintu-desktop ataria dashboard        # or the tray: Open Ataria dashboard (that-computer)
+chintu-desktop ataria disconnect       # revoke this computer there and forget it
+```
+
+`pairing-code` prints the same one-time code the phone scans as a QR code (10 minutes, one use). `connect` keeps the token in `ataria-remote.json` (mode `0600`) in Chintu's data directory. The installer's `--no-ataria-runtime` option asks no Ataria questions and prints this command instead.
 
 ## The profile
 
@@ -155,6 +202,7 @@ The engine is moved from the prototype, not rewritten, so the owner's board keep
 | Stage | Scope | Done when |
 | --- | --- | --- |
 | A1 | Ataria API in the contract; gateway pass-through; the phone's Today sheet (board, todos, digest, tick done) | The phone shows the prototype's board through the gateway and ticks round-trip |
+| A1b | The full dashboard through the gateway (one-time link, session cookie); the tray's dashboard item; pairing a computer with the one that runs Ataria; `--no-ataria-runtime` | The Mac's tray and the phone open the dashboard of the computer that runs Ataria |
 | A2 | Profile schema and loader, template renderer, leak check; the shared lane prompt as the first template | Every bundled template renders for the fictional profile; the package passes the leak check |
 | A3 | Move the engine: runner, merge, app server, month close, OKF helpers; lane prompts and skills as templates, one lane per change | The owner's machine runs each moved lane from this repository with the same board as before |
 | A4 | Portability: the engine's own scheduler with catch-up, `init`/`doctor`, the tray's `AtariaSupervisor`, macOS | A fresh macOS install produces a feeds-only board with no setup beyond `init` |

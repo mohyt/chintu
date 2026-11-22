@@ -49,17 +49,34 @@ class FakeEngine(BaseHTTPRequestHandler):
             if "date=2020-01-01" in self.path:
                 return self.answer(404, {"error": "no board"})
             return self.answer(200, FakeEngine.board)
+        if self.path == "/ataria/":
+            return self.page(200, "text/html; charset=utf-8", b"<!doctype html><title>Ataria</title>")
+        if self.path == "/ataria/api/today?date=2026-11-21":
+            return self.answer(200, {"frontmatter": {"date": "2026-11-21"}})
+        if self.path == "/ataria/odd":
+            return self.page(200, "application/x-sh", b"#!/bin/sh")
         self.answer(404, {"error": "not found"})
+
+    def page(self, code, kind, body):
+        self.send_response(code)
+        self.send_header("content-type", kind)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         if not self.authorised():
             return
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         FakeEngine.posted = body
+        if self.path == "/ataria/api/done":
+            return self.answer(200, {"ok": True})
         self.answer(200, FakeEngine.reply or {**body, "done_at": "2026-11-22T09:00:00+08:00", "extra": "dropped"})
 
 
-class AtariaTests(unittest.TestCase):
+class AtariaCase(unittest.TestCase):
+    """A fake engine and a gateway paired with one phone."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -83,7 +100,8 @@ class AtariaTests(unittest.TestCase):
 
     def start(self, config, name="gateway"):
         app = create_app(Settings(self.base / f"{name}.sqlite3", enable_worker=False, ataria=config))
-        client = TestClient(app).__enter__()
+        # The phone reaches the gateway over HTTPS (Tailscale Serve), so Secure cookies are sent back.
+        client = TestClient(app, base_url="https://testserver").__enter__()
         self.addCleanup(client.__exit__, None, None, None)
         response = client.post("/api/v1/pair", headers={"X-Chintu-Protocol": "1"}, json={
             "enrollment_secret": app.state.store.create_enrollment(), "client_name": "Phone"})
@@ -95,6 +113,8 @@ class AtariaTests(unittest.TestCase):
         (app or self.app).state.contract.validate("Error" if expected >= 400 else schema, response.json())
         return response.json()
 
+
+class AtariaTests(AtariaCase):
     def test_status_reports_engine(self):
         status = self.call("GET", "/api/v1/ataria", schema="AtariaStatus")
         self.assertEqual(status, {"enabled": True, "reachable": True, "latest_date": "2026-11-22", "reason": None})

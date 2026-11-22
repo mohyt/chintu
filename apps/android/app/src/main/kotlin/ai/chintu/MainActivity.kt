@@ -1912,6 +1912,18 @@ class MainActivity : Activity() {
             ui(ticket) { renderToday(board, origin) }
         }
     }
+    /** The full dashboard (digest, work, finance, kids, growth, month) opens in the browser with a one-time link. */
+    private fun openDashboard(origin: ClientStore) {
+        background("Opening the dashboard…") { ticket ->
+            val path = api(origin).call("POST", "/api/v1/ataria/link", "{}").getString("path")
+            check(path.startsWith("/ataria/open?code=")) { "The computer did not return a dashboard link." }
+            val url = origin.gateway.trimEnd('/') + path
+            ui(ticket) {
+                try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+                catch (_: android.content.ActivityNotFoundException) { showStatus("No browser is installed to open the dashboard.") }
+            }
+        }
+    }
     private fun atariaEntry(value: JSONObject) = AtariaBoard.Entry(value.getString("uid"), value.getString("kind"),
         value.getString("priority"), value.getString("group"), value.getString("title"), value.text("short_title").ifEmpty { null },
         value.text("parent").ifEmpty { null }, value.optBoolean("done"), value.text("lane"), value.text("due").ifEmpty { null })
@@ -1923,6 +1935,7 @@ class MainActivity : Activity() {
         val counts = board.optJSONObject("counts")?.let { c -> c.keys().asSequence().associateWith { c.optInt(it) } }.orEmpty()
         board.text("summary").takeIf { it.isNotEmpty() }?.let { label(body, it, 14f, ink) }
         AtariaBoard.countsLine(counts).takeIf { it.isNotEmpty() }?.let { gap(body, 4); label(body, it, 12f, muted) }
+        gap(body, 8); button(body, "Open the full dashboard") { openDashboard(origin) }
         val groups = AtariaBoard.sections(values.map { atariaEntry(it) })
         if (groups.isEmpty()) { gap(body); label(body, "Nothing on the board yet.", 14f, muted) }
         groups.forEach { group ->

@@ -269,6 +269,12 @@ class Store:
         return {"clients": clients, "phone_connected": any(c["connected"] for c in clients),
                 "active_tasks": active, "total_tasks": total}
 
+    def client_active(self, client_id):
+        """True while the client is paired: not revoked and not expired."""
+        with self.connection() as db:
+            return db.execute("SELECT 1 FROM clients WHERE client_id=? AND revoked=0 AND expires_at>?",
+                              (client_id, time.time())).fetchone() is not None
+
     def revoke(self, client_id):
         """True when a live client was revoked; revoking again or an unknown ID is False."""
         with self.transaction() as db:

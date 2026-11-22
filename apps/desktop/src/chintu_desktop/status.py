@@ -43,6 +43,7 @@ class DesktopState:
     fault_kind: str | None        # `local.LocalError.kind` when the poll failed, else None
     error: str | None
     checked_at: float
+    ataria: bool = False          # this computer's gateway serves an Ataria dashboard
 
 
 def local_url(port, path):
@@ -123,7 +124,8 @@ def derive_state(payload, error=None, port=DEFAULT_PORT, now=None, clients=None)
         provider=payload.get("provider"),
         fault_kind=None,
         error=None,
-        checked_at=checked_at)
+        checked_at=checked_at,
+        ataria=payload.get("ataria") is True)
 
 
 def phone_line(state):

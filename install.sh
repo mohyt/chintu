@@ -13,6 +13,8 @@
 #   --force                reinstall the same version, or downgrade  CHINTU_FORCE=1
 #   --ataria / --no-ataria set up Ataria now / skip the question     CHINTU_ATARIA=1|0
 #   --ataria-profile PATH  use this ataria.json; no setup questions   CHINTU_ATARIA_PROFILE
+#   --no-ataria-runtime    Ataria runs on another computer; this one  CHINTU_ATARIA_RUNTIME=0
+#                          only shows its dashboard (no profile here)
 #   --no-start             install without starting the tray          CHINTU_NO_START=1
 #   GITHUB_TOKEN           only needed while the repository is private
 #
@@ -34,12 +36,13 @@ usage() {
 Install or upgrade Chintu (and its Ataria daily board).
 
   install.sh [--version X.Y.Z[-rcN] | --pre | --file PATH] [--force]
-             [--ataria | --no-ataria | --ataria-profile PATH] [--no-start]
+             [--ataria | --no-ataria | --ataria-profile PATH | --no-ataria-runtime] [--no-start]
 
   --version   install that release            --pre        newest release, test releases included
   --file      install a package you have      --force      reinstall the same version, or downgrade
   --ataria    set up Ataria now               --no-ataria  skip the Ataria question
   --ataria-profile PATH   use an ataria.json you already have; no setup questions
+  --no-ataria-runtime     Ataria runs on another computer: no profile here, just its dashboard
   --no-start  install without starting the tray
 USAGE
 }
@@ -332,6 +335,17 @@ start_tray() {
 setup_ataria() {
   local cli="$APP_BIN"
   [ -x "$cli" ] || { warn "cannot find $cli; skipping Ataria"; return 0; }
+  if [ "${CHINTU_ATARIA_RUNTIME:-1}" = 0 ]; then
+    [ -z "${CHINTU_ATARIA_PROFILE:-}" ] || die "--ataria-profile and --no-ataria-runtime contradict each other"
+    [ ! -f "$PROFILE" ] || warn "$PROFILE exists, so Ataria can also run here; remove it if another computer runs Ataria"
+    if [ -f "$(dirname "$PROFILE")/ataria-remote.json" ]; then
+      say "This computer shows the Ataria dashboard of the computer it is connected to (tray: Open Ataria dashboard)"
+    else
+      say "Ataria runs on another computer. To show its dashboard here, run this here (replace that-computer):"
+      say "  ssh that-computer chintu-desktop pairing-code | chintu-desktop ataria connect -"
+    fi
+    return 0
+  fi
   if [ -n "${CHINTU_ATARIA_PROFILE:-}" ]; then
     local given="${CHINTU_ATARIA_PROFILE/#\~/$HOME}"
     [ -f "$given" ] || die "--ataria-profile: no such file: $given"
@@ -407,6 +421,7 @@ parse_args() {
       --no-ataria) CHINTU_ATARIA=0 ;;
       --ataria-profile) [ $# -ge 2 ] || die "--ataria-profile needs a path"; CHINTU_ATARIA_PROFILE="$2"; shift ;;
       --ataria-profile=*) CHINTU_ATARIA_PROFILE="${1#*=}" ;;
+      --no-ataria-runtime) CHINTU_ATARIA_RUNTIME=0 ;;
       --no-start) CHINTU_NO_START=1 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
