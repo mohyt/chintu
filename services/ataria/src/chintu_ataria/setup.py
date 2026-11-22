@@ -490,11 +490,12 @@ def doctor(path=None, out=None, which=shutil.which, home=None):
                 note("warn", "deny list", f"{deny_path} is readable by others; run: chmod 600 '{deny_path}'")
             else:
                 note("ok", "deny list", str(deny_path))
-        # Only where each secret is kept is configured; doctor reports by entry name and never prints a location.
-        for name, reference in (value.get("secrets") or {}).items():
-            label, where = f"secret {name}", f"secrets.{name} in ataria.json"
+        # Only where each secret is kept is configured. Doctor prints nothing taken from that section,
+        # not even an entry's name or store: entries are numbered in file order.
+        for number, reference in enumerate((value.get("secrets") or {}).values(), 1):
+            label, where = f"secret #{number}", f"entry {number} of `secrets` in ataria.json"
             if reference["store"] != "file":
-                note("ok", label, f"kept in {reference['store']} (not read by this check)")
+                note("ok", label, "kept in the system's credential store (not read by this check)")
                 continue
             location = Path(reference["ref"]).expanduser()
             if location.parent.is_dir() and not os.access(location.parent, os.X_OK):

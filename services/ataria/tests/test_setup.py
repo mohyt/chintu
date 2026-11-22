@@ -161,7 +161,7 @@ class SetupTests(unittest.TestCase):
         self.assertIn("used by: finance, google, ledger, personal, review", levels["codex"][1])
         self.assertEqual(levels["claude"][0], "warn", "installed but no sign-in folder")
         self.assertEqual(levels["statements"][0], "warn", "statements folder missing")
-        self.assertEqual(levels["secret statements"][0], "fail", "the referenced file is missing")
+        self.assertEqual(levels["secret #1"][0], "fail", "the referenced file is missing")
         self.assertEqual(code, 1)
         self.assertIn("FAIL", out.getvalue())
 
