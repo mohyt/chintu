@@ -70,22 +70,23 @@ The schema is `services/ataria/src/chintu_ataria/schema/profile.schema.json`, an
 
 | Key | Holds |
 | --- | --- |
-| `owner` | `name` (required), `full_name`, `role`, `email`, `timezone`, `locale`, `city` |
-| `family` | People the household lanes know about: `name`, `relation`, optional `school` and `notes` |
-| `work` | `company`, `role`, `clients`, `products`, `team`, `github_orgs` |
+| `owner` | Shared by every job: `name` (required), `full_name`, `city`, `timezone`, `locale` |
 | `vault` | The vault folder (required) |
-| `schedule`, `agents` | Run times and catch-up; which agent each lane uses |
-| `sources` | One object per source with `enabled` and that source's settings, such as feed packs or mail labels |
-| `delivery` | `phone`, and `recipients` with name, channel, address and which digests they get |
-| `context` | Free-text notes the templates insert where a field does not fit: how to judge work items, family routines, writing style, known alert feeds |
+| `personal` | Personal life, read by the `google`, `personal`, `notes`, `finance` and `ledger` jobs: personal `email`, `family` (name, relation, school, notes), `interests`, `sources` (Gmail, Google Calendar, feed packs, voice notes), `finance` (on or off, currency, banks, statements folder) and free-text `context` notes |
+| `work` | Work, read by the `work`, `meetings` and `interviews` jobs, or `{"enabled": false}`: `company`, `role`, work `email`, `clients`, `products`, `team`, `github_orgs`, `sources` (Microsoft 365, Teams, Jira, GitHub, meetings, WhatsApp work groups) and `context` notes (how to judge work items, alert feeds) |
+| `jobs` | One entry per job: `enabled`, `agent` (`claude` or `codex`), `model` (or `null` for the agent's default) and, for Codex, `web_search` |
+| `schedule` | Morning and midday times; whether a missed step runs on wake |
+| `delivery` | `phone`, and `recipients` with name, channel, address, which areas (work, personal, family, finance) and which digests |
 | `secrets` | Where each secret lives (`keychain`, `secret-service` or a `file`) and its reference. Never the secret itself |
 | `privacy` | `deny_patterns_file`, a local list of strings that must never leave the machine or reach the repository |
+
+The opinionated job defaults: Claude Code runs `work`, `meetings`, `interviews` and `notes`; Codex runs `google`, `personal` (with web search), `finance`, `ledger` and `review`. Every job can be switched to the other agent or another model during setup.
 
 Unknown keys are allowed and kept, so a newer profile works with older code. Agents keep their own logins (Claude Code, Codex and their connectors); the profile never holds a password or token.
 
 ### Setting it up
 
-`chintu-desktop ataria init` asks for every part of the profile, section by section, and writes it only after showing a summary. Run again, it edits: each question shows the current answer and Enter keeps it, unknown keys are kept, and the previous file is kept as a dated backup. `chintu-desktop ataria doctor` checks the profile (valid and private), that every bundled template can be filled from it, the timezone, the vault folder, that each chosen agent is installed and looks signed in, the deny list, and secret references stored in files. `install.sh` offers `init` on a first install and runs `doctor` on an upgrade. A setup sheet in the tray app, writing the same file through the same code, is planned for a later candidate.
+`chintu-desktop ataria init` asks in four parts (A. about you, B. personal life, C. work, which can be skipped, D. the jobs, one block each for whether it runs, its agent and model, then the schedule, digests, secret references and privacy), says what each answer is used for, and writes the file only after showing a summary. Run again, it edits: each question shows the current answer and Enter keeps it, unknown keys are kept, and the previous file is kept as a dated backup. `chintu-desktop ataria doctor` checks the profile (valid and private), that every bundled template can be filled from it, the timezone, the vault folder, that each chosen agent is installed and looks signed in, the deny list, and secret references stored in files. `install.sh` offers `init` on a first install and runs `doctor` on an upgrade. A setup sheet in the tray app, writing the same file through the same code, is planned for a later candidate.
 
 ## Templates
 

@@ -1,46 +1,67 @@
 {
   "schema": 1,
-  "owner": {
-    "name": "Sam",
-    "full_name": "Sam Example",
-    "role": "Head of Delivery",
+  "owner": {"name": "Sam", "full_name": "Sam Example", "city": "Singapore", "timezone": "Asia/Singapore", "locale": "en-GB"},
+  "vault": "~/vaults/main",
+  "personal": {
     "email": "sam@example.com",
-    "timezone": "Asia/Singapore",
-    "locale": "en-GB",
-    "city": "Singapore"
+    "family": [
+      {"name": "Alex", "relation": "partner"},
+      {"name": "Robin", "relation": "child", "school": "Example Primary School"}
+    ],
+    "interests": ["AI agents", "distributed systems", "running"],
+    "sources": {
+      "gmail": {"enabled": true},
+      "google_calendar": {"enabled": true},
+      "feeds": {"enabled": true, "packs": ["world", "tech", "ai"]},
+      "chintu_notes": {"enabled": true}
+    },
+    "finance": {"enabled": true, "currency": "SGD", "banks": ["Example Bank"], "statements_folder": "~/Documents/Statements"},
+    "context": {
+      "family": "School notices about fees or forms are todos; activity photos are information only.",
+      "style": "Short sentences. Lead with what needs doing."
+    }
   },
-  "family": [
-    {"name": "Alex", "relation": "partner"},
-    {"name": "Robin", "relation": "child", "school": "Example Primary School"}
-  ],
   "work": {
+    "enabled": true,
     "company": "Example Systems",
     "role": "Head of Delivery",
+    "email": "sam@work.example.com",
     "clients": ["Northwind Bank", "Contoso Telecom"],
     "products": ["Ledgerline", "Signal Desk"],
     "team": ["Priya", "Tom"],
-    "github_orgs": ["example-systems"]
+    "github_orgs": ["example-systems"],
+    "sources": {
+      "microsoft365": {"enabled": true},
+      "teams": {"enabled": true},
+      "jira": {"enabled": true},
+      "github": {"enabled": true},
+      "meetings": {"enabled": true},
+      "whatsapp_groups": {"enabled": false}
+    },
+    "context": {
+      "work": "Client escalations and anything blocking a release come first. Internal newsletters are information only.",
+      "alert_feeds": "Build Results, Deploy Status and Nightly Scan bot channels"
+    }
   },
-  "vault": "~/vaults/main",
+  "jobs": {
+    "work": {"enabled": true, "agent": "claude", "model": "claude-opus-5-5"},
+    "meetings": {"enabled": true, "agent": "claude", "model": "claude-opus-5-5"},
+    "interviews": {"enabled": false, "agent": "claude", "model": "claude-opus-5-5"},
+    "google": {"enabled": true, "agent": "codex", "model": "gpt-6.1-sol", "web_search": false},
+    "personal": {"enabled": true, "agent": "codex", "model": "gpt-6.1-sol", "web_search": true},
+    "notes": {"enabled": true, "agent": "claude", "model": "claude-opus-5-5"},
+    "finance": {"enabled": true, "agent": "codex", "model": "gpt-6.1-sol", "web_search": false},
+    "ledger": {"enabled": true, "agent": "codex", "model": "gpt-6.1-sol", "web_search": false},
+    "review": {"enabled": true, "agent": "codex", "model": "gpt-6.1-sol", "web_search": false}
+  },
   "schedule": {"morning": "07:00", "midday": "13:30", "catch_up": true},
-  "agents": {"default": "codex", "lanes": {"work": "claude", "meetings": "claude"}},
-  "sources": {
-    "feeds": {"enabled": true, "packs": ["world", "tech", "ai"]},
-    "google": {"enabled": true, "via": "codex-connector", "labels": {"reading": "Reading/Tech"}},
-    "github": {"enabled": false},
-    "notes": {"enabled": true}
-  },
   "delivery": {
     "phone": true,
-    "recipients": [{"name": "Sam", "channel": "phone", "digests": ["morning", "midday"]}]
+    "recipients": [
+      {"name": "Sam", "channel": "phone", "areas": ["work", "personal", "family", "finance"], "digests": ["morning", "midday"]},
+      {"name": "Alex", "channel": "whatsapp", "areas": ["family"], "digests": ["evening"]}
+    ]
   },
-  "context": {
-    "work": "Client escalations and anything blocking a release come first. Internal newsletters are information only.",
-    "family": "School notices about fees or forms are todos; activity photos are information only.",
-    "style": "Short sentences. Lead with what needs doing."
-  },
-  "secrets": {
-    "statements": {"store": "keychain", "ref": "ataria/statements"}
-  },
+  "secrets": {"statements": {"store": "keychain", "ref": "ataria/statements"}},
   "privacy": {"deny_patterns_file": null}
 }

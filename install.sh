@@ -336,7 +336,7 @@ setup_ataria() {
   local want="${CHINTU_ATARIA:-}"
   if [ -z "$want" ]; then
     if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-      printf '\nAtaria builds a daily board from your mail, calendar, work and news, and shows it in the\nChintu phone app. Set it up now? It asks about 30 short questions. [y/N]: ' > /dev/tty
+      printf '\nAtaria builds a daily board from your mail, calendar, work and news, and shows it in the\nChintu phone app. Set it up now? It asks about you, your personal life, your work (optional) and which agent runs each job. [y/N]: ' > /dev/tty
       local answer=""
       read -r answer < /dev/tty || true
       case "$answer" in [Yy]*) want=1 ;; *) want=0 ;; esac

@@ -183,10 +183,10 @@ To switch: on the home screen tap the gear (⚙) to open Settings, open the perm
 
 Ataria is an optional part of Chintu that reads your sources (mail, calendar, work tools, news feeds, voice notes) on a schedule and builds a daily board: what needs you today, open todos, and a digest of what is worth knowing. The phone shows it behind the **✓** button when the selected computer has Ataria set up.
 
-Everything personal it needs (your name, timezone, vault folder, clients, family, who gets which digest) lives only in `ataria.json` on your computer, readable by you alone; the code and prompts in this repository contain none of it. Set it up, or change your answers later, with:
+Everything personal it needs (your name and timezone, personal life and work kept apart, which agent and model runs each job, who gets which digest) lives only in `ataria.json` on your computer, readable by you alone; the code and prompts in this repository contain none of it. Set it up, or change your answers later, with:
 
 ```sh
-chintu-desktop ataria init      # asks about 30 short questions; re-run to edit
+chintu-desktop ataria init      # about you, personal life, work, and which agent runs each job; re-run to edit
 chintu-desktop ataria doctor    # checks the profile, vault, agent sign-ins and secret references
 ```
 

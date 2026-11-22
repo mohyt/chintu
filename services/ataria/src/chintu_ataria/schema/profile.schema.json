@@ -2,70 +2,92 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chintu.local/schemas/ataria-profile-1.json",
   "title": "Ataria profile",
-  "description": "Everything personal Ataria needs, kept on the owner's machine and read at run time. Never committed. Secrets are referenced, not stored.",
+  "description": "Everything personal Ataria needs, kept on the owner's machine and read at run time. Never committed. Personal life and work are separate sections; each job names its own agent. Secrets are referenced, not stored.",
   "type": "object",
   "required": ["schema", "owner", "vault"],
   "properties": {
     "schema": {"const": 1},
     "owner": {
       "type": "object",
+      "description": "Who the owner is, shared by every job.",
       "required": ["name"],
       "properties": {
         "name": {"$ref": "#/$defs/short"},
         "full_name": {"$ref": "#/$defs/short"},
-        "role": {"$ref": "#/$defs/short"},
-        "email": {"$ref": "#/$defs/short"},
+        "city": {"$ref": "#/$defs/short"},
         "timezone": {"type": "string", "pattern": "^[A-Za-z]+(/[A-Za-z0-9_+-]+)*$", "maxLength": 64},
-        "locale": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"},
-        "city": {"$ref": "#/$defs/short"}
+        "locale": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
       }
     },
-    "family": {
-      "type": "array", "maxItems": 20,
-      "items": {
-        "type": "object", "required": ["name", "relation"],
-        "properties": {
-          "name": {"$ref": "#/$defs/short"},
-          "relation": {"$ref": "#/$defs/short"},
-          "school": {"$ref": "#/$defs/short"},
-          "notes": {"$ref": "#/$defs/long"}
-        }
+    "vault": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "personal": {
+      "type": "object",
+      "description": "Personal life: read by the google, personal, notes, finance and ledger jobs.",
+      "properties": {
+        "email": {"$ref": "#/$defs/short"},
+        "family": {
+          "type": "array", "maxItems": 20,
+          "items": {
+            "type": "object", "required": ["name", "relation"],
+            "properties": {
+              "name": {"$ref": "#/$defs/short"},
+              "relation": {"$ref": "#/$defs/short"},
+              "school": {"$ref": "#/$defs/short"},
+              "notes": {"$ref": "#/$defs/long"}
+            }
+          }
+        },
+        "interests": {"$ref": "#/$defs/names"},
+        "sources": {"$ref": "#/$defs/sources"},
+        "finance": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+            "banks": {"$ref": "#/$defs/names"},
+            "statements_folder": {"$ref": "#/$defs/short"}
+          }
+        },
+        "context": {"$ref": "#/$defs/context"}
       }
     },
     "work": {
       "type": "object",
+      "description": "Work: read by the work, meetings and interviews jobs. Absent or enabled: false when Ataria should not follow work.",
       "properties": {
+        "enabled": {"type": "boolean"},
         "company": {"$ref": "#/$defs/short"},
         "role": {"$ref": "#/$defs/short"},
+        "email": {"$ref": "#/$defs/short"},
         "clients": {"$ref": "#/$defs/names"},
         "products": {"$ref": "#/$defs/names"},
         "team": {"$ref": "#/$defs/names"},
-        "github_orgs": {"$ref": "#/$defs/names"}
+        "github_orgs": {"$ref": "#/$defs/names"},
+        "sources": {"$ref": "#/$defs/sources"},
+        "context": {"$ref": "#/$defs/context"}
       }
     },
-    "vault": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "jobs": {
+      "type": "object",
+      "description": "One entry per job: whether it runs, which agent runs it, and that agent's model and options.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["enabled", "agent"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "agent": {"enum": ["codex", "claude"]},
+          "model": {"type": ["string", "null"], "maxLength": 100},
+          "web_search": {"type": "boolean"}
+        }
+      }
+    },
     "schedule": {
       "type": "object",
       "properties": {
         "morning": {"$ref": "#/$defs/clock"},
         "midday": {"$ref": "#/$defs/clock"},
         "catch_up": {"type": "boolean"}
-      }
-    },
-    "agents": {
-      "type": "object",
-      "properties": {
-        "default": {"enum": ["codex", "claude"]},
-        "lanes": {"type": "object", "additionalProperties": {"enum": ["codex", "claude"]}}
-      }
-    },
-    "sources": {
-      "type": "object",
-      "description": "One object per source; each has `enabled` and the source's own settings.",
-      "additionalProperties": {
-        "type": "object",
-        "required": ["enabled"],
-        "properties": {"enabled": {"type": "boolean"}}
       }
     },
     "delivery": {
@@ -80,18 +102,12 @@
               "name": {"$ref": "#/$defs/short"},
               "channel": {"enum": ["phone", "whatsapp", "email"]},
               "address": {"$ref": "#/$defs/short"},
+              "areas": {"type": "array", "items": {"enum": ["work", "personal", "family", "finance"]}},
               "digests": {"type": "array", "items": {"enum": ["morning", "midday", "evening", "month"]}}
             }
           }
         }
       }
-    },
-    "context": {
-      "type": "object",
-      "description": "Free-text notes templates insert where a field does not fit: how to judge work items, family routines, writing style.",
-      "maxProperties": 50,
-      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,40}$"},
-      "additionalProperties": {"$ref": "#/$defs/long"}
     },
     "secrets": {
       "type": "object",
@@ -114,6 +130,21 @@
     "short": {"type": "string", "minLength": 1, "maxLength": 300},
     "long": {"type": "string", "maxLength": 8000},
     "names": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/short"}},
-    "clock": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+    "clock": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
+    "sources": {
+      "type": "object",
+      "description": "One object per source; each has `enabled` and the source's own settings.",
+      "additionalProperties": {
+        "type": "object", "required": ["enabled"],
+        "properties": {"enabled": {"type": "boolean"}}
+      }
+    },
+    "context": {
+      "type": "object",
+      "description": "Free-text notes the templates insert where a field does not fit.",
+      "maxProperties": 50,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,40}$"},
+      "additionalProperties": {"$ref": "#/$defs/long"}
+    }
   }
 }
